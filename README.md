@@ -1,4 +1,3 @@
-import os
 
 # Define the content of the README.md file
 readme_content = """# Amp-Plugin-Project

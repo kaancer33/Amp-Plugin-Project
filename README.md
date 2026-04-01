@@ -1,35 +1,38 @@
-Overview
-This is a JUCE project designed for real-time guitar amplifier simulation. The repository contains the source code and configuration files required to build and run the application as a VST3 audio plug-in.
+import os
 
-Technical Details
-Project Type: JUCE Project (.jucer)
+# Define the content of the README.md file
+readme_content = """# Amp-Plugin-Project
 
-Target Format: VST3
+## Description
+Amp-Plugin-Project is a JUCE-based C++ project developed for real-time guitar amplifier simulation. The project implements digital signal processing (DSP) algorithms to model audio characteristics and is designed to function as a VST3 audio plug-in.
 
-Language: C++
+## Technical Specifications
+* **Project Type:** JUCE Project
+* **Language:** C++
+* **Output Format:** VST3
+* **Build Systems:** CMake and Projucer
+* **Platform Support:** Cross-platform (Windows, macOS, Linux)
 
-Build System: CMake / Projucer
+## Repository Structure
+* **Source/**: Core C++ implementation files for audio processing and UI logic.
+* **NewProject.jucer**: The central JUCE project configuration file for Projucer.
+* **CMakeLists.txt**: Build configuration for CMake-based workflows.
+* **.vscode/**: Development environment settings for Visual Studio Code.
 
-Processing: Real-time digital signal processing (DSP) for guitar amplification.
+## Getting Started
 
-Project Structure
-Source/: Contains the core C++ source files for audio processing and GUI.
+### Prerequisites
+* JUCE (latest version recommended)
+* C++ Compiler (MSVC, Clang, or GCC)
+* CMake 3.15 or higher (optional)
 
-NewProject.jucer: The primary JUCE project file for Projucer configuration.
+### Build Process (via Projucer)
+1. Open `NewProject.jucer` in the JUCE Projucer application.
+2. Select your preferred IDE exporter (e.g., Visual Studio 2022, Xcode).
+3. Select "Save and Open in IDE".
+4. Build the solution within your IDE to generate the VST3 binary.
 
-CMakeLists.txt: Build configuration for CMake-based workflows.
-
-Build Instructions
-Prerequisites
-JUCE
-
-C++ Compiler (MSVC, Clang, or GCC)
-
-CMake (optional, for CMake builds)
-
-Compilation
-Open NewProject.jucer in Projucer.
-
-Save and open the project in your preferred IDE (Visual Studio, Xcode, etc.).
-
-Build the solution to generate the VST3 binary.
+### Build Process (via CMake)
+```bash
+cmake -B build
+cmake --build build --config Release

@@ -1,3 +1,5 @@
+# Amp-Plugin-Project
+
 ## Description
 Amp-Plugin-Project is a JUCE-based C++ project developed for real-time guitar amplifier simulation. The project implements digital signal processing (DSP) algorithms to model audio characteristics and is designed to function as a VST3 audio plug-in.
 
@@ -31,3 +33,4 @@ Amp-Plugin-Project is a JUCE-based C++ project developed for real-time guitar am
 ```bash
 cmake -B build
 cmake --build build --config Release
+```

@@ -6,34 +6,39 @@ const juce::String PresetManager::kExtension = ".npp";
 // ── Factory preset definitions ───────────────────────────────────────────────
 const PresetManager::FactoryData PresetManager::kFactory[PresetManager::kNumFactory] =
 {
+    // ── Clean: sparkly clean with a touch of room reverb ──────────────
     { "Clean", {
-        {"drive", 1.0f}, {"level", 0.85f},
-        {"delayTime", 0.0f}, {"delayFeedback", 0.0f}, {"delayMix", 0.0f},
-        {"reverbRoom", 0.25f}, {"reverbDamp", 0.6f}, {"reverbMix", 0.12f},
+        {"drive", 1.0f}, {"odTone", 6000.0f}, {"level", 0.85f},
+        {"delayTime", 20.0f}, {"delayFeedback", 0.0f}, {"delayTone", 6000.0f}, {"delayMix", 0.0f},
+        {"reverbRoom", 0.25f}, {"reverbPreDelay", 15.0f}, {"reverbDamp", 0.6f}, {"reverbMix", 0.12f},
         {"overdriveOn", 0.0f}, {"delayOn", 0.0f}, {"reverbOn", 1.0f}
     }},
+    // ── Crunch: edge-of-breakup with slapback ───────────────────────────
     { "Crunch", {
-        {"drive", 5.0f}, {"level", 0.75f},
-        {"delayTime", 120.0f}, {"delayFeedback", 0.25f}, {"delayMix", 0.18f},
-        {"reverbRoom", 0.4f}, {"reverbDamp", 0.5f}, {"reverbMix", 0.22f},
+        {"drive", 5.0f}, {"odTone", 5000.0f}, {"level", 0.75f},
+        {"delayTime", 120.0f}, {"delayFeedback", 0.25f}, {"delayTone", 5000.0f}, {"delayMix", 0.18f},
+        {"reverbRoom", 0.4f}, {"reverbPreDelay", 25.0f}, {"reverbDamp", 0.5f}, {"reverbMix", 0.22f},
         {"overdriveOn", 1.0f}, {"delayOn", 1.0f}, {"reverbOn", 1.0f}
     }},
+    // ── Blues OD: warm, singing sustain with lush delay ──────────────────
     { "Blues OD", {
-        {"drive", 8.0f}, {"level", 0.70f},
-        {"delayTime", 380.0f}, {"delayFeedback", 0.40f}, {"delayMix", 0.28f},
-        {"reverbRoom", 0.5f}, {"reverbDamp", 0.45f}, {"reverbMix", 0.28f},
+        {"drive", 8.0f}, {"odTone", 3500.0f}, {"level", 0.70f},
+        {"delayTime", 380.0f}, {"delayFeedback", 0.40f}, {"delayTone", 4000.0f}, {"delayMix", 0.28f},
+        {"reverbRoom", 0.5f}, {"reverbPreDelay", 30.0f}, {"reverbDamp", 0.45f}, {"reverbMix", 0.28f},
         {"overdriveOn", 1.0f}, {"delayOn", 1.0f}, {"reverbOn", 1.0f}
     }},
+    // ── Heavy: tight high-gain, dark tone, minimal ambience ─────────────
     { "Heavy", {
-        {"drive", 18.0f}, {"level", 0.60f},
-        {"delayTime", 80.0f}, {"delayFeedback", 0.20f}, {"delayMix", 0.12f},
-        {"reverbRoom", 0.45f}, {"reverbDamp", 0.65f}, {"reverbMix", 0.18f},
+        {"drive", 18.0f}, {"odTone", 2500.0f}, {"level", 0.60f},
+        {"delayTime", 80.0f}, {"delayFeedback", 0.20f}, {"delayTone", 3500.0f}, {"delayMix", 0.12f},
+        {"reverbRoom", 0.45f}, {"reverbPreDelay", 15.0f}, {"reverbDamp", 0.65f}, {"reverbMix", 0.18f},
         {"overdriveOn", 1.0f}, {"delayOn", 1.0f}, {"reverbOn", 1.0f}
     }},
+    // ── Space Echo: ambient, dreamy, long dark repeats ───────────────────
     { "Space Echo", {
-        {"drive", 3.0f}, {"level", 0.78f},
-        {"delayTime", 620.0f}, {"delayFeedback", 0.70f}, {"delayMix", 0.55f},
-        {"reverbRoom", 0.80f}, {"reverbDamp", 0.30f}, {"reverbMix", 0.45f},
+        {"drive", 3.0f}, {"odTone", 5500.0f}, {"level", 0.78f},
+        {"delayTime", 620.0f}, {"delayFeedback", 0.70f}, {"delayTone", 3000.0f}, {"delayMix", 0.55f},
+        {"reverbRoom", 0.80f}, {"reverbPreDelay", 40.0f}, {"reverbDamp", 0.30f}, {"reverbMix", 0.45f},
         {"overdriveOn", 1.0f}, {"delayOn", 1.0f}, {"reverbOn", 1.0f}
     }},
 };

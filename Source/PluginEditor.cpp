@@ -87,11 +87,13 @@ NewProjectAudioProcessorEditor::NewProjectAudioProcessorEditor (NewProjectAudioP
       audioProcessor (p),
       presetMgr (p),
       overdrivePanel ("OVERDRIVE", p.apvts, "overdriveOn",
-                       { {"drive", "DRIVE"}, {"level", "LEVEL"} }),
+                       { {"drive", "DRIVE"}, {"odTone", "TONE"}, {"level", "LEVEL"} }),
       delayPanel     ("DELAY",     p.apvts, "delayOn",
-                       { {"delayTime", "TIME"}, {"delayFeedback", "FDBK"}, {"delayMix", "MIX"} }),
+                       { {"delayTime", "TIME"}, {"delayFeedback", "FDBK"},
+                         {"delayTone", "TONE"}, {"delayMix", "MIX"} }),
       reverbPanel    ("REVERB",    p.apvts, "reverbOn",
-                       { {"reverbRoom", "ROOM"}, {"reverbDamp", "DAMP"}, {"reverbMix", "MIX"} })
+                       { {"reverbRoom", "ROOM"}, {"reverbPreDelay", "PRE-D"},
+                         {"reverbDamp", "DAMP"}, {"reverbMix", "MIX"} })
 {
     setLookAndFeel (&laf);
 

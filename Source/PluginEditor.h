@@ -52,7 +52,7 @@ private:
     PresetManager    presetMgr;
 
     // ── Effect panels ──────────────────────────────────────────────────────
-    EffectPanel overdrivePanel, delayPanel, reverbPanel;
+    EffectPanel distortionPanel, delayPanel, reverbPanel;
 
     // ── Preset bar ────────────────────────────────────────────────────────
     juce::TextButton prevBtn   { "<" };

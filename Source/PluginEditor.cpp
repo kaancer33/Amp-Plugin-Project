@@ -86,8 +86,8 @@ NewProjectAudioProcessorEditor::NewProjectAudioProcessorEditor (NewProjectAudioP
     : AudioProcessorEditor (&p),
       audioProcessor (p),
       presetMgr (p),
-      overdrivePanel ("OVERDRIVE", p.apvts, "overdriveOn",
-                       { {"drive", "DRIVE"}, {"odTone", "TONE"}, {"level", "LEVEL"} }),
+      distortionPanel ("DISTORTION", p.apvts, "distortionOn",
+                       { {"distortion", "DIST"}, {"distTone", "TONE"}, {"level", "LEVEL"} }),
       delayPanel     ("DELAY",     p.apvts, "delayOn",
                        { {"delayTime", "TIME"}, {"delayFeedback", "FDBK"},
                          {"delayTone", "TONE"}, {"delayMix", "MIX"} }),
@@ -97,7 +97,7 @@ NewProjectAudioProcessorEditor::NewProjectAudioProcessorEditor (NewProjectAudioP
 {
     setLookAndFeel (&laf);
 
-    addAndMakeVisible (overdrivePanel);
+    addAndMakeVisible (distortionPanel);
     addAndMakeVisible (delayPanel);
     addAndMakeVisible (reverbPanel);
 
@@ -265,7 +265,7 @@ void NewProjectAudioProcessorEditor::resized()
     deleteBtn.setBounds (px, pbY, actW,   pbH);
 
     // ── Effect panels ────────────────────────────────────────────────────
-    overdrivePanel.setBounds (0,          panelY, panelW, panelH);
+    distortionPanel.setBounds (0,          panelY, panelW, panelH);
     delayPanel    .setBounds (panelW,     panelY, panelW, panelH);
     reverbPanel   .setBounds (panelW * 2, panelY, panelW, panelH);
 }

@@ -4,49 +4,49 @@
 const juce::String PresetManager::kExtension = ".npp";
 
 // ── Factory preset definitions ───────────────────────────────────────────────
+// Values tuned for the new distortion range (1–80, skew 0.25) and level range.
 const PresetManager::FactoryData PresetManager::kFactory[PresetManager::kNumFactory] =
 {
     // ── Clean: sparkly clean with a touch of room reverb ──────────────
     { "Clean", {
-        {"drive", 1.0f}, {"odTone", 6000.0f}, {"level", 0.85f},
+        {"distortion", 1.0f}, {"distTone", 8000.0f}, {"level", 0.85f},
         {"delayTime", 20.0f}, {"delayFeedback", 0.0f}, {"delayTone", 6000.0f}, {"delayMix", 0.0f},
         {"reverbRoom", 0.25f}, {"reverbPreDelay", 15.0f}, {"reverbDamp", 0.6f}, {"reverbMix", 0.12f},
-        {"overdriveOn", 0.0f}, {"delayOn", 0.0f}, {"reverbOn", 1.0f}
+        {"distortionOn", 0.0f}, {"delayOn", 0.0f}, {"reverbOn", 1.0f}
     }},
-    // ── Crunch: edge-of-breakup with slapback ───────────────────────────
+    // ── Crunch: edge-of-breakup rhythm tone with slapback ──────────────
     { "Crunch", {
-        {"drive", 5.0f}, {"odTone", 5000.0f}, {"level", 0.75f},
+        {"distortion", 8.0f}, {"distTone", 5000.0f}, {"level", 0.70f},
         {"delayTime", 120.0f}, {"delayFeedback", 0.25f}, {"delayTone", 5000.0f}, {"delayMix", 0.18f},
         {"reverbRoom", 0.4f}, {"reverbPreDelay", 25.0f}, {"reverbDamp", 0.5f}, {"reverbMix", 0.22f},
-        {"overdriveOn", 1.0f}, {"delayOn", 1.0f}, {"reverbOn", 1.0f}
+        {"distortionOn", 1.0f}, {"delayOn", 1.0f}, {"reverbOn", 1.0f}
     }},
-    // ── Blues OD: warm, singing sustain with lush delay ──────────────────
-    { "Blues OD", {
-        {"drive", 8.0f}, {"odTone", 3500.0f}, {"level", 0.70f},
+    // ── Blues Lead: warm, singing sustain with lush delay ──────────────
+    { "Blues Lead", {
+        {"distortion", 20.0f}, {"distTone", 3500.0f}, {"level", 0.55f},
         {"delayTime", 380.0f}, {"delayFeedback", 0.40f}, {"delayTone", 4000.0f}, {"delayMix", 0.28f},
         {"reverbRoom", 0.5f}, {"reverbPreDelay", 30.0f}, {"reverbDamp", 0.45f}, {"reverbMix", 0.28f},
-        {"overdriveOn", 1.0f}, {"delayOn", 1.0f}, {"reverbOn", 1.0f}
+        {"distortionOn", 1.0f}, {"delayOn", 1.0f}, {"reverbOn", 1.0f}
     }},
-    // ── Heavy: tight high-gain, dark tone, minimal ambience ─────────────
+    // ── Heavy: tight high-gain rock/metal rhythm ────────────────────────
     { "Heavy", {
-        {"drive", 18.0f}, {"odTone", 2500.0f}, {"level", 0.60f},
-        {"delayTime", 80.0f}, {"delayFeedback", 0.20f}, {"delayTone", 3500.0f}, {"delayMix", 0.12f},
-        {"reverbRoom", 0.45f}, {"reverbPreDelay", 15.0f}, {"reverbDamp", 0.65f}, {"reverbMix", 0.18f},
-        {"overdriveOn", 1.0f}, {"delayOn", 1.0f}, {"reverbOn", 1.0f}
+        {"distortion", 45.0f}, {"distTone", 3000.0f}, {"level", 0.45f},
+        {"delayTime", 80.0f}, {"delayFeedback", 0.15f}, {"delayTone", 3500.0f}, {"delayMix", 0.08f},
+        {"reverbRoom", 0.4f}, {"reverbPreDelay", 15.0f}, {"reverbDamp", 0.65f}, {"reverbMix", 0.15f},
+        {"distortionOn", 1.0f}, {"delayOn", 1.0f}, {"reverbOn", 1.0f}
     }},
-    // ── Space Echo: ambient, dreamy, long dark repeats ───────────────────
-    { "Space Echo", {
-        {"drive", 3.0f}, {"odTone", 5500.0f}, {"level", 0.78f},
-        {"delayTime", 620.0f}, {"delayFeedback", 0.70f}, {"delayTone", 3000.0f}, {"delayMix", 0.55f},
-        {"reverbRoom", 0.80f}, {"reverbPreDelay", 40.0f}, {"reverbDamp", 0.30f}, {"reverbMix", 0.45f},
-        {"overdriveOn", 1.0f}, {"delayOn", 1.0f}, {"reverbOn", 1.0f}
+    // ── Death Metal: brutal high gain, dark, very tight ─────────────────
+    { "Death Metal", {
+        {"distortion", 70.0f}, {"distTone", 2500.0f}, {"level", 0.35f},
+        {"delayTime", 60.0f}, {"delayFeedback", 0.10f}, {"delayTone", 3000.0f}, {"delayMix", 0.05f},
+        {"reverbRoom", 0.35f}, {"reverbPreDelay", 10.0f}, {"reverbDamp", 0.75f}, {"reverbMix", 0.12f},
+        {"distortionOn", 1.0f}, {"delayOn", 0.0f}, {"reverbOn", 1.0f}
     }},
 };
 
 // ── Constructor ──────────────────────────────────────────────────────────────
 PresetManager::PresetManager (NewProjectAudioProcessor& p) : proc (p)
 {
-    // Scan default folder for user presets on startup
     auto folder = defaultFolder();
     folder.createDirectory();
     scanDirectory (folder);
@@ -110,10 +110,8 @@ void PresetManager::saveCurrentPreset (std::function<void()> onDone)
             std::unique_ptr<juce::XmlElement> xml (state.createXml());
             if (xml) xml->writeTo (file);
 
-            // Refresh list so the new preset appears
             scanDirectory (defaultFolder());
 
-            // Select the newly saved preset
             for (int i = 0; i < userPresets.size(); ++i)
             {
                 if (userPresets[i].file == file)

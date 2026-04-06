@@ -102,6 +102,31 @@ NewProjectAudioProcessorEditor::NewProjectAudioProcessorEditor (NewProjectAudioP
     addAndMakeVisible (delayPanel);
     addAndMakeVisible (reverbPanel);
 
+    // ── NAM Model selector ─────────────────────────────────────────────────
+    modelBarLabel.setText ("MODEL:", juce::dontSendNotification);
+    modelBarLabel.setJustificationType (juce::Justification::centredRight);
+    addAndMakeVisible (modelBarLabel);
+
+    modelSelector.setJustificationType (juce::Justification::centredLeft);
+    modelSelector.onChange = [this]
+    {
+        int idx = modelSelector.getSelectedItemIndex();
+        if (idx >= 0)
+        {
+            auto names = audioProcessor.getAvailableModelNames();
+            if (idx < names.size())
+            {
+                audioProcessor.loadModelByName (names[idx]);
+            }
+        }
+    };
+    addAndMakeVisible (modelSelector);
+
+    loadModelBtn.onClick = [this] { onLoadModelFile(); };
+    addAndMakeVisible (loadModelBtn);
+
+    refreshModelList();
+
     // ── Preset bar ──────────────────────────────────────────────────────────
     presetLbl.setJustificationType (juce::Justification::centred);
     addAndMakeVisible (presetLbl);
@@ -124,19 +149,19 @@ NewProjectAudioProcessorEditor::NewProjectAudioProcessorEditor (NewProjectAudioP
         sizeS.setToggleState (true,  juce::dontSendNotification);
         sizeM.setToggleState (false, juce::dontSendNotification);
         sizeL.setToggleState (false, juce::dontSendNotification);
-        setSize (600, 310);
+        setSize (600, 340);
     };
     sizeM.onClick = [this] {
         sizeS.setToggleState (false, juce::dontSendNotification);
         sizeM.setToggleState (true,  juce::dontSendNotification);
         sizeL.setToggleState (false, juce::dontSendNotification);
-        setSize (900, 460);
+        setSize (900, 500);
     };
     sizeL.onClick = [this] {
         sizeS.setToggleState (false, juce::dontSendNotification);
         sizeM.setToggleState (false, juce::dontSendNotification);
         sizeL.setToggleState (true,  juce::dontSendNotification);
-        setSize (1200, 610);
+        setSize (1200, 660);
     };
 
     for (auto* b : { &sizeS, &sizeM, &sizeL })
@@ -145,12 +170,75 @@ NewProjectAudioProcessorEditor::NewProjectAudioProcessorEditor (NewProjectAudioP
     refreshPresetLabel();
 
     sizeM.setToggleState (true, juce::dontSendNotification);
-    setSize (900, 460);
+    setSize (900, 500);
 }
 
 NewProjectAudioProcessorEditor::~NewProjectAudioProcessorEditor()
 {
     setLookAndFeel (nullptr);
+}
+
+//==============================================================================
+void NewProjectAudioProcessorEditor::refreshModelList()
+{
+    modelSelector.clear (juce::dontSendNotification);
+    auto names = audioProcessor.getAvailableModelNames();
+
+    for (int i = 0; i < names.size(); ++i)
+        modelSelector.addItem (names[i], i + 1);   // ComboBox IDs start at 1
+
+    // Select current model
+    int currentIdx = audioProcessor.getCurrentModelIndex();
+    if (currentIdx >= 0)
+        modelSelector.setSelectedItemIndex (currentIdx, juce::dontSendNotification);
+    else if (names.size() > 0)
+        modelSelector.setSelectedItemIndex (0, juce::dontSendNotification);
+}
+
+void NewProjectAudioProcessorEditor::onLoadModelFile()
+{
+    auto chooser = std::make_shared<juce::FileChooser> (
+        "Load NAM Model",
+        juce::File::getSpecialLocation (juce::File::userHomeDirectory),
+        "*.nam");
+
+    chooser->launchAsync (juce::FileBrowserComponent::openMode
+                         | juce::FileBrowserComponent::canSelectFiles,
+        [this, chooser] (const juce::FileChooser& fc)
+        {
+            auto results = fc.getResults();
+            if (results.size() > 0)
+            {
+                auto file = results[0];
+                audioProcessor.importNAMModel (file);
+                refreshModelList();
+            }
+        });
+}
+
+//==============================================================================
+// Drag & Drop support — drop .nam files directly onto the plugin window
+//==============================================================================
+bool NewProjectAudioProcessorEditor::isInterestedInFileDrag (const juce::StringArray& files)
+{
+    for (auto& f : files)
+        if (f.endsWithIgnoreCase (".nam"))
+            return true;
+    return false;
+}
+
+void NewProjectAudioProcessorEditor::filesDropped (const juce::StringArray& files, int, int)
+{
+    for (auto& f : files)
+    {
+        juce::File file (f);
+        if (file.hasFileExtension (".nam"))
+        {
+            audioProcessor.importNAMModel (file);
+            refreshModelList();
+            break;  // Load first valid .nam file
+        }
+    }
 }
 
 //==============================================================================
@@ -214,15 +302,17 @@ void NewProjectAudioProcessorEditor::paint (juce::Graphics& g)
 {
     g.fillAll (juce::Colours::black);
 
-    const int topBarH   = getHeight() / 11;
+    const int topBarH    = getHeight() / 13;
+    const int modelBarH  = topBarH;
     const int presetBarH = topBarH;
 
     g.setColour (juce::Colours::white);
-    g.drawHorizontalLine (topBarH,             0.0f, (float) getWidth());
-    g.drawHorizontalLine (topBarH + presetBarH, 0.0f, (float) getWidth());
+    g.drawHorizontalLine (topBarH,                         0.0f, (float) getWidth());
+    g.drawHorizontalLine (topBarH + modelBarH,             0.0f, (float) getWidth());
+    g.drawHorizontalLine (topBarH + modelBarH + presetBarH, 0.0f, (float) getWidth());
 
     // Panel dividers (vertical lines between the three panels)
-    const int panelY = topBarH + presetBarH;
+    const int panelY = topBarH + modelBarH + presetBarH;
     const int panelW = getWidth() / 3;
     g.drawVerticalLine (panelW,     (float) panelY, (float) getHeight());
     g.drawVerticalLine (panelW * 2, (float) panelY, (float) getHeight());
@@ -235,13 +325,14 @@ void NewProjectAudioProcessorEditor::paint (juce::Graphics& g)
 
 void NewProjectAudioProcessorEditor::resized()
 {
-    const int W        = getWidth();
-    const int H        = getHeight();
-    const int topBarH  = H / 11;
-    const int presetH  = topBarH;
-    const int panelY   = topBarH + presetH;
-    const int panelH   = H - panelY;
-    const int panelW   = W / 3;
+    const int W         = getWidth();
+    const int H         = getHeight();
+    const int topBarH   = H / 13;
+    const int modelBarH = topBarH;
+    const int presetH   = topBarH;
+    const int panelY    = topBarH + modelBarH + presetH;
+    const int panelH    = H - panelY;
+    const int panelW    = W / 3;
 
     // ── Size buttons (top-right) ─────────────────────────────────────────
     const int sbH = topBarH - 8;
@@ -250,8 +341,20 @@ void NewProjectAudioProcessorEditor::resized()
     sizeM.setBounds (W - sbW * 2 - 8,     4, sbW, sbH);
     sizeS.setBounds (W - sbW * 3 - 12,    4, sbW, sbH);
 
+    // ── NAM Model selector bar ──────────────────────────────────────────
+    const int mbY = topBarH + 2;
+    const int mbH = modelBarH - 4;
+    const int labelW = juce::roundToInt (W * 0.08f);
+    const int loadW  = juce::roundToInt (W * 0.12f);
+    const int comboW = W - labelW - loadW - 14;
+
+    int mx = 4;
+    modelBarLabel.setBounds (mx, mbY, labelW, mbH);  mx += labelW + 2;
+    modelSelector.setBounds (mx, mbY, comboW, mbH);  mx += comboW + 4;
+    loadModelBtn.setBounds  (mx, mbY, loadW,  mbH);
+
     // ── Preset bar ──────────────────────────────────────────────────────
-    const int pbY     = topBarH + 2;
+    const int pbY     = topBarH + modelBarH + 2;
     const int pbH     = presetH - 4;
     const int arrowW  = pbH;
     const int actW    = juce::roundToInt (W * 0.085f);

@@ -112,6 +112,34 @@ private:
             a2 = ((A+1) - (A-1)*cosW - tsa)      * a0inv;
         }
 
+        // 2nd-order Butterworth HP (Q = 0.7071)
+        void setHighPass (float freq, float sr, float Q = 0.7071f)
+        {
+            const float w0 = juce::MathConstants<float>::twoPi * freq / sr;
+            const float alpha = std::sin (w0) / (2.0f * Q);
+            const float cosW  = std::cos (w0);
+            const float a0inv = 1.0f / (1.0f + alpha);
+            b0 =  (1.0f + cosW) * 0.5f * a0inv;
+            b1 = -(1.0f + cosW)        * a0inv;
+            b2 =  (1.0f + cosW) * 0.5f * a0inv;
+            a1 = -2.0f * cosW          * a0inv;
+            a2 = (1.0f - alpha)        * a0inv;
+        }
+
+        // 2nd-order Butterworth LP (Q = 0.7071)
+        void setLowPass (float freq, float sr, float Q = 0.7071f)
+        {
+            const float w0 = juce::MathConstants<float>::twoPi * freq / sr;
+            const float alpha = std::sin (w0) / (2.0f * Q);
+            const float cosW  = std::cos (w0);
+            const float a0inv = 1.0f / (1.0f + alpha);
+            b0 = (1.0f - cosW) * 0.5f * a0inv;
+            b1 = (1.0f - cosW)        * a0inv;
+            b2 = (1.0f - cosW) * 0.5f * a0inv;
+            a1 = -2.0f * cosW         * a0inv;
+            a2 = (1.0f - alpha)       * a0inv;
+        }
+
         float process (float x)
         {
             float y = b0 * x + z1;
@@ -259,6 +287,18 @@ private:
     Biquad bassEqL,   bassEqR;               // low shelf 200 Hz
     Biquad midEqL,    midEqR;                // peak EQ 800 Hz
     Biquad trebleEqL, trebleEqR;             // high shelf 3500 Hz
+
+    // ── Cabinet simulation (SM57 on 4x12 V30 approximation) ───────────
+    // Without cab sim, raw amp output sounds harsh and fizzy.
+    // This filter chain models the frequency response of a guitar speaker
+    // cabinet mic'd with an SM57 — the standard for metal tones.
+    Biquad cabHPL,    cabHPR;                // 2nd-order HP @ 70 Hz (cab box)
+    Biquad cabResoL,  cabResoR;              // +3 dB @ 120 Hz (low-end thump)
+    Biquad cabBoxL,   cabBoxR;               // -3 dB @ 400 Hz (remove boxiness)
+    Biquad cabPresL,  cabPresR;              // +2 dB @ 2.5 kHz (presence)
+    Biquad cabNotchL, cabNotchR;             // -6 dB @ 4.5 kHz (cone breakup dip)
+    Biquad cabLPL,    cabLPR;                // 2nd-order LP @ 5.5 kHz (speaker rolloff)
+    Biquad cabLP2L,   cabLP2R;               // extra LP @ 8 kHz (SM57 proximity)
 
     juce::SmoothedValue<float> distSmoothed, levelSmoothed;
 

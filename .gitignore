@@ -44,6 +44,5 @@ desktop.ini
 .idea/
 cmake-build-*/
 
-# Dependencies (downloaded separately — too large for git)
-Dependencies/eigen/
+# Dependencies
 Dependencies/nlohmann/

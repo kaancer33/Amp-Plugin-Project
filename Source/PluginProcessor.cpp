@@ -11,41 +11,32 @@ NewProjectAudioProcessor::NewProjectAudioProcessor()
           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "Parameters", createParameterLayout())
 {
-    // Try to load the bundled default model on construction.
-    // Search multiple locations so it works on any OS / build setup.
-    auto exeDir = juce::File::getSpecialLocation (
-        juce::File::SpecialLocationType::currentApplicationFile).getParentDirectory();
+    // Ensure models directory exists and try to load the first available model.
+    // getModelsDirectory() will copy bundled models to app data on first run.
+    auto modelsDir = getModelsDirectory();
+    auto namFiles = modelsDir.findChildFiles (juce::File::findFiles, false, "*.nam");
 
-    juce::File defaultModel;
-
-    // Search order for default.nam:
-    juce::Array<juce::File> searchPaths = {
-        exeDir.getChildFile ("default.nam"),
-        exeDir.getChildFile ("Models").getChildFile ("default.nam"),
-        exeDir.getParentDirectory().getChildFile ("Models").getChildFile ("default.nam"),
-        exeDir.getParentDirectory().getParentDirectory().getChildFile ("Models").getChildFile ("default.nam"),
-        // Walk up from build output to project root (Windows: build/Source/Debug/...)
-        exeDir.getParentDirectory().getParentDirectory().getParentDirectory().getChildFile ("Models").getChildFile ("default.nam"),
-        exeDir.getParentDirectory().getParentDirectory().getParentDirectory().getParentDirectory().getChildFile ("Models").getChildFile ("default.nam"),
-    };
-
-    // Also check the user's app data models directory
-    auto appDataModels = juce::File::getSpecialLocation (
-        juce::File::userApplicationDataDirectory)
-        .getChildFile ("NewProject").getChildFile ("Models").getChildFile ("default.nam");
-    searchPaths.add (appDataModels);
-
-    for (auto& path : searchPaths)
+    if (namFiles.size() > 0)
     {
-        if (path.existsAsFile())
+        // Prefer "default.nam" if it exists, otherwise load the first one
+        juce::File modelToLoad;
+        for (auto& f : namFiles)
         {
-            defaultModel = path;
-            break;
+            if (f.getFileNameWithoutExtension().equalsIgnoreCase ("default"))
+            {
+                modelToLoad = f;
+                break;
+            }
         }
+        if (!modelToLoad.existsAsFile())
+            modelToLoad = namFiles[0];
+
+        loadNAMModel (modelToLoad);
     }
 
-    if (defaultModel.existsAsFile())
-        loadNAMModel (defaultModel);
+    DBG ("NAM model loaded: " + juce::String (isModelLoaded() ? "YES" : "NO")
+         + " | Name: " + getModelName()
+         + " | Models dir: " + modelsDir.getFullPathName());
 }
 
 NewProjectAudioProcessor::~NewProjectAudioProcessor() {}
@@ -84,6 +75,8 @@ void NewProjectAudioProcessor::loadNAMModel (const juce::File& namFile)
 juce::File NewProjectAudioProcessor::getModelsDirectory() const
 {
     // Use a persistent "Models" folder in the user's app data
+    // Windows: C:\Users\<user>\AppData\Roaming\NewProject\Models
+    // macOS:   ~/Library/Application Support/NewProject/Models
     auto appData = juce::File::getSpecialLocation (
         juce::File::userApplicationDataDirectory)
         .getChildFile ("NewProject").getChildFile ("Models");
@@ -91,31 +84,58 @@ juce::File NewProjectAudioProcessor::getModelsDirectory() const
     if (!appData.isDirectory())
         appData.createDirectory();
 
-    // On first run, copy bundled models into the app data directory.
-    // Search multiple locations to find the Models folder.
+    // On first run, find bundled Models/ folder and copy .nam files to app data.
+    // We search aggressively — exe location, plugin location, and known paths.
+    juce::Array<juce::File> searchDirs;
+
+    // From the executable / plugin binary
     auto exeDir = juce::File::getSpecialLocation (
         juce::File::currentApplicationFile).getParentDirectory();
-
-    juce::File bundledDir;
-    juce::Array<juce::File> searchDirs = {
-        exeDir.getChildFile ("Models"),
-        exeDir.getParentDirectory().getChildFile ("Models"),
-        exeDir.getParentDirectory().getParentDirectory().getChildFile ("Models"),
-        exeDir.getParentDirectory().getParentDirectory().getParentDirectory().getChildFile ("Models"),
-        exeDir.getParentDirectory().getParentDirectory().getParentDirectory().getParentDirectory().getChildFile ("Models"),
-    };
-    for (auto& d : searchDirs)
+    // Walk up to 8 levels (covers deep build paths like Builds/VS2022/x64/Debug/VST3/...)
+    auto dir = exeDir;
+    for (int i = 0; i < 8; ++i)
     {
-        if (d.isDirectory()) { bundledDir = d; break; }
+        searchDirs.add (dir.getChildFile ("Models"));
+        dir = dir.getParentDirectory();
     }
 
-    if (bundledDir.exists() && bundledDir.isDirectory())
+    // From the current working directory
+    auto cwd = juce::File::getCurrentWorkingDirectory();
+    searchDirs.add (cwd.getChildFile ("Models"));
+    dir = cwd;
+    for (int i = 0; i < 5; ++i)
     {
-        for (auto& f : bundledDir.findChildFiles (juce::File::findFiles, false, "*.nam"))
+        searchDirs.add (dir.getChildFile ("Models"));
+        dir = dir.getParentDirectory();
+    }
+
+    // Common Windows development locations
+  #if JUCE_WINDOWS
+    auto desktop = juce::File::getSpecialLocation (juce::File::userDesktopDirectory);
+    searchDirs.add (desktop.getChildFile ("plugin devoloping").getChildFile ("Amp-Plugin-Project-main").getChildFile ("Models"));
+    searchDirs.add (desktop.getChildFile ("plugin devoloping").getChildFile ("Models"));
+    searchDirs.add (desktop.getChildFile ("Amp-Plugin-Project-main").getChildFile ("Models"));
+    auto docs = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory);
+    searchDirs.add (docs.getChildFile ("Amp-Plugin-Project-main").getChildFile ("Models"));
+  #endif
+
+    // Try to find and copy bundled models
+    for (auto& d : searchDirs)
+    {
+        if (d.isDirectory())
         {
-            auto dest = appData.getChildFile (f.getFileName());
-            if (!dest.existsAsFile())
-                f.copyFileTo (dest);
+            auto namFiles = d.findChildFiles (juce::File::findFiles, false, "*.nam");
+            if (namFiles.size() > 0)
+            {
+                DBG ("Found bundled Models at: " + d.getFullPathName());
+                for (auto& f : namFiles)
+                {
+                    auto dest = appData.getChildFile (f.getFileName());
+                    if (!dest.existsAsFile())
+                        f.copyFileTo (dest);
+                }
+                break;  // Found it, stop searching
+            }
         }
     }
 

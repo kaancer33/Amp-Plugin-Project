@@ -38,7 +38,7 @@ public:
     struct FactoryData
     {
         const char* name;
-        ParamVal params[14];
+        ParamVal params[17];
     };
     static const FactoryData kFactory[kNumFactory];
 

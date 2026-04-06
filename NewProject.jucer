@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
 <JUCERPROJECT id="CdtaVL" name="NewProject" projectType="audioplug" useAppConfig="0"
-              addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1">
+              addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1"
+              cppLanguageStandard="17"
+              defines="JUCE_WEB_BROWSER=0&#10;JUCE_USE_CURL=0">
   <MAINGROUP id="P8V47V" name="NewProject">
     <GROUP id="{14852E8C-A897-15AC-31F8-EC7A9B4A3411}" name="Source">
       <FILE id="Vwv30o" name="PluginProcessor.cpp" compile="1" resource="0"
@@ -10,7 +12,74 @@
             file="Source/PluginProcessor.h"/>
       <FILE id="ce30Lz" name="PluginEditor.cpp" compile="1" resource="0"
             file="Source/PluginEditor.cpp"/>
-      <FILE id="WnZ18Z" name="PluginEditor.h" compile="0" resource="0" file="Source/PluginEditor.h"/>
+      <FILE id="WnZ18Z" name="PluginEditor.h" compile="0" resource="0"
+            file="Source/PluginEditor.h"/>
+      <FILE id="pLaF01" name="PixelLookAndFeel.h" compile="0" resource="0"
+            file="Source/PixelLookAndFeel.h"/>
+      <FILE id="pMgr01" name="PresetManager.h" compile="0" resource="0"
+            file="Source/PresetManager.h"/>
+      <FILE id="pMgr02" name="PresetManager.cpp" compile="1" resource="0"
+            file="Source/PresetManager.cpp"/>
+    </GROUP>
+    <GROUP id="{NAM00000-0000-0000-0000-000000000000}" name="NAM">
+      <FILE id="nam01" name="activations.cpp" compile="1" resource="0"
+            file="Source/NAM/activations.cpp"/>
+      <FILE id="nam02" name="activations.h" compile="0" resource="0"
+            file="Source/NAM/activations.h"/>
+      <FILE id="nam03" name="container.cpp" compile="1" resource="0"
+            file="Source/NAM/container.cpp"/>
+      <FILE id="nam04" name="container.h" compile="0" resource="0"
+            file="Source/NAM/container.h"/>
+      <FILE id="nam05" name="conv1d.cpp" compile="1" resource="0"
+            file="Source/NAM/conv1d.cpp"/>
+      <FILE id="nam06" name="conv1d.h" compile="0" resource="0"
+            file="Source/NAM/conv1d.h"/>
+      <FILE id="nam07" name="convnet.cpp" compile="1" resource="0"
+            file="Source/NAM/convnet.cpp"/>
+      <FILE id="nam08" name="convnet.h" compile="0" resource="0"
+            file="Source/NAM/convnet.h"/>
+      <FILE id="nam09" name="dsp.cpp" compile="1" resource="0"
+            file="Source/NAM/dsp.cpp"/>
+      <FILE id="nam10" name="dsp.h" compile="0" resource="0"
+            file="Source/NAM/dsp.h"/>
+      <FILE id="nam11" name="film.h" compile="0" resource="0"
+            file="Source/NAM/film.h"/>
+      <FILE id="nam12" name="gating_activations.h" compile="0" resource="0"
+            file="Source/NAM/gating_activations.h"/>
+      <FILE id="nam13" name="get_dsp.cpp" compile="1" resource="0"
+            file="Source/NAM/get_dsp.cpp"/>
+      <FILE id="nam14" name="get_dsp.h" compile="0" resource="0"
+            file="Source/NAM/get_dsp.h"/>
+      <FILE id="nam15" name="json.hpp" compile="0" resource="0"
+            file="Source/NAM/json.hpp"/>
+      <FILE id="nam16" name="lstm.cpp" compile="1" resource="0"
+            file="Source/NAM/lstm.cpp"/>
+      <FILE id="nam17" name="lstm.h" compile="0" resource="0"
+            file="Source/NAM/lstm.h"/>
+      <FILE id="nam18" name="model_config.h" compile="0" resource="0"
+            file="Source/NAM/model_config.h"/>
+      <FILE id="nam19" name="registry.h" compile="0" resource="0"
+            file="Source/NAM/registry.h"/>
+      <FILE id="nam20" name="ring_buffer.cpp" compile="1" resource="0"
+            file="Source/NAM/ring_buffer.cpp"/>
+      <FILE id="nam21" name="ring_buffer.h" compile="0" resource="0"
+            file="Source/NAM/ring_buffer.h"/>
+      <FILE id="nam22" name="slimmable.h" compile="0" resource="0"
+            file="Source/NAM/slimmable.h"/>
+      <FILE id="nam23" name="slimmable_wavenet.cpp" compile="1" resource="0"
+            file="Source/NAM/slimmable_wavenet.cpp"/>
+      <FILE id="nam24" name="slimmable_wavenet.h" compile="0" resource="0"
+            file="Source/NAM/slimmable_wavenet.h"/>
+      <FILE id="nam25" name="util.cpp" compile="1" resource="0"
+            file="Source/NAM/util.cpp"/>
+      <FILE id="nam26" name="util.h" compile="0" resource="0"
+            file="Source/NAM/util.h"/>
+      <FILE id="nam27" name="version.h" compile="0" resource="0"
+            file="Source/NAM/version.h"/>
+      <FILE id="nam28" name="wavenet.cpp" compile="1" resource="0"
+            file="Source/NAM/wavenet.cpp"/>
+      <FILE id="nam29" name="wavenet.h" compile="0" resource="0"
+            file="Source/NAM/wavenet.h"/>
     </GROUP>
   </MAINGROUP>
   <MODULES>
@@ -23,17 +92,23 @@
     <MODULE id="juce_audio_utils" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
     <MODULE id="juce_core" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
     <MODULE id="juce_data_structures" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_dsp" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
     <MODULE id="juce_events" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
     <MODULE id="juce_graphics" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
     <MODULE id="juce_gui_basics" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
     <MODULE id="juce_gui_extra" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
   </MODULES>
-  <JUCEOPTIONS JUCE_STRICT_REFCOUNTEDPOINTER="1" JUCE_VST3_CAN_REPLACE_VST2="0"/>
+  <JUCEOPTIONS JUCE_STRICT_REFCOUNTEDPOINTER="1" JUCE_VST3_CAN_REPLACE_VST2="0"
+               JUCE_WEB_BROWSER="0" JUCE_USE_CURL="0"/>
   <EXPORTFORMATS>
-    <VS2026 targetFolder="Builds/VisualStudio2026">
+    <XCODE_MAC targetFolder="Builds/MacOSX"
+               extraCompilerFlags="-std=c++17"
+               extraDefs="JUCE_WEB_BROWSER=0&#10;JUCE_USE_CURL=0">
       <CONFIGURATIONS>
-        <CONFIGURATION isDebug="1" name="Debug" targetName="NewProject"/>
-        <CONFIGURATION isDebug="0" name="Release" targetName="NewProject"/>
+        <CONFIGURATION isDebug="1" name="Debug" targetName="NewProject"
+                       headerPath="../../Dependencies/eigen&#10;../../Source/NAM"/>
+        <CONFIGURATION isDebug="0" name="Release" targetName="NewProject"
+                       headerPath="../../Dependencies/eigen&#10;../../Source/NAM"/>
       </CONFIGURATIONS>
       <MODULEPATHS>
         <MODULEPATH id="juce_audio_basics" path="../../JUCE/modules"/>
@@ -44,11 +119,36 @@
         <MODULEPATH id="juce_audio_utils" path="../../JUCE/modules"/>
         <MODULEPATH id="juce_core" path="../../JUCE/modules"/>
         <MODULEPATH id="juce_data_structures" path="../../JUCE/modules"/>
+        <MODULEPATH id="juce_dsp" path="../../JUCE/modules"/>
         <MODULEPATH id="juce_events" path="../../JUCE/modules"/>
         <MODULEPATH id="juce_graphics" path="../../JUCE/modules"/>
         <MODULEPATH id="juce_gui_basics" path="../../JUCE/modules"/>
         <MODULEPATH id="juce_gui_extra" path="../../JUCE/modules"/>
       </MODULEPATHS>
-    </VS2026>
+    </XCODE_MAC>
+    <VS2022 targetFolder="Builds/VisualStudio2022"
+            extraCompilerFlags="/std:c++17">
+      <CONFIGURATIONS>
+        <CONFIGURATION isDebug="1" name="Debug" targetName="NewProject"
+                       headerPath="../../Dependencies/eigen&#10;../../Source/NAM"/>
+        <CONFIGURATION isDebug="0" name="Release" targetName="NewProject"
+                       headerPath="../../Dependencies/eigen&#10;../../Source/NAM"/>
+      </CONFIGURATIONS>
+      <MODULEPATHS>
+        <MODULEPATH id="juce_audio_basics" path="../../JUCE/modules"/>
+        <MODULEPATH id="juce_audio_devices" path="../../JUCE/modules"/>
+        <MODULEPATH id="juce_audio_formats" path="../../JUCE/modules"/>
+        <MODULEPATH id="juce_audio_plugin_client" path="../../JUCE/modules"/>
+        <MODULEPATH id="juce_audio_processors" path="../../JUCE/modules"/>
+        <MODULEPATH id="juce_audio_utils" path="../../JUCE/modules"/>
+        <MODULEPATH id="juce_core" path="../../JUCE/modules"/>
+        <MODULEPATH id="juce_data_structures" path="../../JUCE/modules"/>
+        <MODULEPATH id="juce_dsp" path="../../JUCE/modules"/>
+        <MODULEPATH id="juce_events" path="../../JUCE/modules"/>
+        <MODULEPATH id="juce_graphics" path="../../JUCE/modules"/>
+        <MODULEPATH id="juce_gui_basics" path="../../JUCE/modules"/>
+        <MODULEPATH id="juce_gui_extra" path="../../JUCE/modules"/>
+      </MODULEPATHS>
+    </VS2022>
   </EXPORTFORMATS>
 </JUCERPROJECT>

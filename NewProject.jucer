@@ -3,6 +3,7 @@
 <JUCERPROJECT id="CdtaVL" name="NewProject" projectType="audioplug" useAppConfig="0"
               addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1"
               cppLanguageStandard="17"
+              pluginFormats="buildVST3"
               defines="JUCE_WEB_BROWSER=0&#10;JUCE_USE_CURL=0">
   <MAINGROUP id="P8V47V" name="NewProject">
     <GROUP id="{14852E8C-A897-15AC-31F8-EC7A9B4A3411}" name="Source">

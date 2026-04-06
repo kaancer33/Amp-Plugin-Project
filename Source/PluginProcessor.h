@@ -44,6 +44,12 @@ public:
     bool isModelLoaded() const { return namModel != nullptr; }
     juce::String getModelName() const { return currentModelName; }
 
+    // ── NAM runtime diagnostics ─────────────────────────────────────────
+    // True if NAM process() ran successfully on the last audio block
+    std::atomic<bool> namIsProcessing { false };
+    // Debug info string (set during loadNAMModel)
+    juce::String lastLoadError;
+
     // ── NAM Model Directory Management ───────────────────────────────────
     juce::File getModelsDirectory() const;
     juce::StringArray getAvailableModelNames() const;

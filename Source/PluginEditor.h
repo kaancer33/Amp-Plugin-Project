@@ -33,7 +33,8 @@ private:
 
 //==============================================================================
 class NewProjectAudioProcessorEditor : public juce::AudioProcessorEditor,
-                                        public juce::FileDragAndDropTarget
+                                        public juce::FileDragAndDropTarget,
+                                        private juce::Timer
 {
 public:
     explicit NewProjectAudioProcessorEditor (NewProjectAudioProcessor&);
@@ -45,6 +46,9 @@ public:
     // ── FileDragAndDropTarget ────────────────────────────────────────────
     bool isInterestedInFileDrag (const juce::StringArray& files) override;
     void filesDropped (const juce::StringArray& files, int x, int y) override;
+
+    // ── Timer (updates NAM status indicator) ────────────────────────────
+    void timerCallback() override;
 
 private:
     void applySize (int w, int h);
@@ -67,6 +71,7 @@ private:
     juce::ComboBox   modelSelector;
     juce::TextButton loadModelBtn  { "LOAD .NAM" };
     juce::Label      modelBarLabel;
+    juce::Label      namStatusLabel;   // shows "NAM" (green) or "FALLBACK" (red)
 
     // ── Preset bar ────────────────────────────────────────────────────────
     juce::TextButton prevBtn   { "<" };

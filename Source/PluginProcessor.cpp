@@ -45,7 +45,14 @@ NewProjectAudioProcessor::~NewProjectAudioProcessor() {}
 void NewProjectAudioProcessor::loadNAMModel (const juce::File& namFile)
 {
     if (!namFile.existsAsFile())
+    {
+        lastLoadError = "File does not exist: " + namFile.getFullPathName();
+        DBG (lastLoadError);
         return;
+    }
+
+    DBG ("NAM: Attempting to load: " + namFile.getFullPathName());
+    DBG ("NAM: File size = " + juce::String (namFile.getSize()) + " bytes");
 
     try
     {
@@ -55,17 +62,31 @@ void NewProjectAudioProcessor::loadNAMModel (const juce::File& namFile)
             // Initialize model with current sample rate
             const double sr = (currentSampleRate > 0) ? currentSampleRate : 48000.0;
             const int maxBuf = 4096;
+            DBG ("NAM: Model created successfully, calling ResetAndPrewarm(sr=" + juce::String(sr) + ")");
             newModel->ResetAndPrewarm (sr, maxBuf);
 
             // Hot-swap under lock
             const juce::SpinLock::ScopedLockType lock (namModelLock);
             namModel = std::move (newModel);
             currentModelName = namFile.getFileNameWithoutExtension();
+            lastLoadError = "";
+            DBG ("NAM: Model loaded and active: " + currentModelName);
+        }
+        else
+        {
+            lastLoadError = "get_dsp returned nullptr for: " + namFile.getFileName();
+            DBG ("NAM: " + lastLoadError);
         }
     }
     catch (const std::exception& e)
     {
-        DBG ("NAM model load failed: " << e.what());
+        lastLoadError = juce::String ("Load failed: ") + e.what();
+        DBG ("NAM: " + lastLoadError);
+    }
+    catch (...)
+    {
+        lastLoadError = "Unknown exception during model load";
+        DBG ("NAM: " + lastLoadError);
     }
 }
 
@@ -355,7 +376,7 @@ void NewProjectAudioProcessor::prepareToPlay (double sampleRate, int samplesPerB
     distBypassGain.reset  (sampleRate, 0.01);
     delayBypassGain.reset (sampleRate, 0.01);
     reverbBypassGain.reset(sampleRate, 0.01);
-    distBypassGain.setCurrentAndTargetValue  (0.0f);
+    distBypassGain.setCurrentAndTargetValue  (1.0f);
     delayBypassGain.setCurrentAndTargetValue (1.0f);
     reverbBypassGain.setCurrentAndTargetValue(1.0f);
 
@@ -493,39 +514,64 @@ void NewProjectAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             R[i] *= driveGain;
         }
 
-        // ─── NAM Neural Inference ──────────────────────────────────────
-        // NAM is mono with internal state — we mix L+R to mono, process once,
-        // then write the result back to both channels.
-        // NAM expects double** (NAM_SAMPLE = double by default).
+        // ─── NAM Neural Inference (or fallback distortion) ──────────────
         {
+            bool namProcessed = false;
+
+            // Try NAM first
             const juce::SpinLock::ScopedTryLockType lock (namModelLock);
             if (lock.isLocked() && namModel)
             {
-                // Ensure buffers are large enough
-                if ((int) namInputBuffer.size() < numSamples)
+                try
                 {
-                    namInputBuffer.resize ((size_t) numSamples);
-                    namOutputBuffer.resize ((size_t) numSamples);
+                    // Ensure buffers are large enough
+                    if ((int) namInputBuffer.size() < numSamples)
+                    {
+                        namInputBuffer.resize ((size_t) numSamples);
+                        namOutputBuffer.resize ((size_t) numSamples);
+                    }
+
+                    // Mix L+R to mono
+                    for (int i = 0; i < numSamples; ++i)
+                        namInputBuffer[(size_t)i] = (double) (L[i] + R[i]) * 0.5;
+
+                    double* inPtr  = namInputBuffer.data();
+                    double* outPtr = namOutputBuffer.data();
+                    double* inPtrs[1]  = { inPtr };
+                    double* outPtrs[1] = { outPtr };
+                    namModel->process (inPtrs, outPtrs, numSamples);
+
+                    // Write mono result back to both channels
+                    for (int i = 0; i < numSamples; ++i)
+                    {
+                        float out = (float) namOutputBuffer[(size_t)i];
+                        L[i] = out;
+                        R[i] = out;
+                    }
+                    namProcessed = true;
                 }
-
-                // ── Mix L+R to mono (equal power sum) ───────────────────
-                for (int i = 0; i < numSamples; ++i)
-                    namInputBuffer[(size_t)i] = (double) (L[i] + R[i]) * 0.5;
-
-                double* inPtr  = namInputBuffer.data();
-                double* outPtr = namOutputBuffer.data();
-                double* inPtrs[1]  = { inPtr };
-                double* outPtrs[1] = { outPtr };
-                namModel->process (inPtrs, outPtrs, numSamples);
-
-                // ── Write mono result back to both channels ─────────────
-                for (int i = 0; i < numSamples; ++i)
+                catch (...)
                 {
-                    float out = (float) namOutputBuffer[(size_t)i];
-                    L[i] = out;
-                    R[i] = out;
+                    DBG ("NAM process() threw an exception!");
+                    namProcessed = false;
                 }
             }
+
+            // ── Fallback: high-gain distortion if NAM not available ─────
+            // Uses atan waveshaper with aggressive gain so the user hears
+            // that the signal chain is working even without a .nam model.
+            if (!namProcessed)
+            {
+                // Map drive 0-1 to gain 1-100 (aggressive)
+                const float fallbackGain = 1.0f + distDrive * 99.0f;
+                for (int i = 0; i < numSamples; ++i)
+                {
+                    L[i] = std::atan (L[i] * fallbackGain) * (2.0f / juce::MathConstants<float>::pi);
+                    R[i] = std::atan (R[i] * fallbackGain) * (2.0f / juce::MathConstants<float>::pi);
+                }
+            }
+
+            namIsProcessing.store (namProcessed, std::memory_order_relaxed);
         }
 
         // ─── Post-NAM 3-band tone stack ─────────────────────────────────

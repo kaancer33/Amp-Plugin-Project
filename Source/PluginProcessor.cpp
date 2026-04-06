@@ -139,6 +139,25 @@ void NewProjectAudioProcessor::prepareToPlay (double sampleRate, int samplesPerB
     trebleEqL.setHighShelf (3500.0f, 0.0f, sr); trebleEqL.reset();
     trebleEqR.setHighShelf (3500.0f, 0.0f, sr); trebleEqR.reset();
 
+    // ── Cabinet simulation (SM57 on 4x12 V30) ───────────────────────────
+    // This is THE most important thing for realistic tone.
+    // Without it, even Neural DSP would sound like garbage.
+    // Models: speaker resonance, cone breakup, mic proximity, rolloff.
+    cabHPL.setHighPass (70.0f, sr);             cabHPL.reset();
+    cabHPR.setHighPass (70.0f, sr);             cabHPR.reset();
+    cabResoL.setPeakEQ (120.0f, 1.5f, 3.0f, sr); cabResoL.reset();
+    cabResoR.setPeakEQ (120.0f, 1.5f, 3.0f, sr); cabResoR.reset();
+    cabBoxL.setPeakEQ (400.0f, 0.8f, -3.0f, sr); cabBoxL.reset();
+    cabBoxR.setPeakEQ (400.0f, 0.8f, -3.0f, sr); cabBoxR.reset();
+    cabPresL.setPeakEQ (2500.0f, 1.2f, 2.0f, sr); cabPresL.reset();
+    cabPresR.setPeakEQ (2500.0f, 1.2f, 2.0f, sr); cabPresR.reset();
+    cabNotchL.setPeakEQ (4500.0f, 2.0f, -6.0f, sr); cabNotchL.reset();
+    cabNotchR.setPeakEQ (4500.0f, 2.0f, -6.0f, sr); cabNotchR.reset();
+    cabLPL.setLowPass (5500.0f, sr);            cabLPL.reset();
+    cabLPR.setLowPass (5500.0f, sr);            cabLPR.reset();
+    cabLP2L.setLowPass (8000.0f, sr, 0.5f);     cabLP2L.reset();
+    cabLP2R.setLowPass (8000.0f, sr, 0.5f);     cabLP2R.reset();
+
     distSmoothed.reset (sampleRate, 0.05);
     levelSmoothed.reset (sampleRate, 0.05);
 
@@ -191,6 +210,13 @@ void NewProjectAudioProcessor::releaseResources()
     bassEqL.reset();      bassEqR.reset();
     midEqL.reset();       midEqR.reset();
     trebleEqL.reset();    trebleEqR.reset();
+    cabHPL.reset();       cabHPR.reset();
+    cabResoL.reset();     cabResoR.reset();
+    cabBoxL.reset();      cabBoxR.reset();
+    cabPresL.reset();     cabPresR.reset();
+    cabNotchL.reset();    cabNotchR.reset();
+    cabLPL.reset();       cabLPR.reset();
+    cabLP2L.reset();      cabLP2R.reset();
     delayFbLPL.reset();   delayFbLPR.reset();
     reverbHCL.reset();    reverbHCR.reset();
     gateL.reset();        gateR.reset();
@@ -262,7 +288,7 @@ void NewProjectAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     //       Power Sag (PSU droop simulation) →
     //     2x Downsample →
     //     Bass Shelf(200Hz) → Mid Peak(800Hz) → Treble Shelf(3.5kHz) →
-    //     Level
+    //     Cabinet Sim (SM57/4x12/V30) → Level
     //======================================================================
     if (distortionOn || distBypassGain.isSmoothing())
     {
@@ -373,6 +399,46 @@ void NewProjectAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         {
             L[i] = trebleEqL.process (L[i]);
             R[i] = trebleEqR.process (R[i]);
+        }
+
+        // ─── Cabinet simulation (SM57 on 4x12 V30) ────────────────────
+        // This is what makes it sound like a real amp, not a raw preamp.
+        // HP removes sub → resonance adds thump → box cut cleans mids →
+        // presence adds bite → notch models cone breakup → LP kills fizz.
+        for (int i = 0; i < numSamples; ++i)
+        {
+            L[i] = cabHPL.process (L[i]);
+            R[i] = cabHPR.process (R[i]);
+        }
+        for (int i = 0; i < numSamples; ++i)
+        {
+            L[i] = cabResoL.process (L[i]);
+            R[i] = cabResoR.process (R[i]);
+        }
+        for (int i = 0; i < numSamples; ++i)
+        {
+            L[i] = cabBoxL.process (L[i]);
+            R[i] = cabBoxR.process (R[i]);
+        }
+        for (int i = 0; i < numSamples; ++i)
+        {
+            L[i] = cabPresL.process (L[i]);
+            R[i] = cabPresR.process (R[i]);
+        }
+        for (int i = 0; i < numSamples; ++i)
+        {
+            L[i] = cabNotchL.process (L[i]);
+            R[i] = cabNotchR.process (R[i]);
+        }
+        for (int i = 0; i < numSamples; ++i)
+        {
+            L[i] = cabLPL.process (L[i]);
+            R[i] = cabLPR.process (R[i]);
+        }
+        for (int i = 0; i < numSamples; ++i)
+        {
+            L[i] = cabLP2L.process (L[i]);
+            R[i] = cabLP2R.process (R[i]);
         }
 
         // ─── Level (smoothed) ───────────────────────────────────────────

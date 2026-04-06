@@ -184,6 +184,15 @@ void NewProjectAudioProcessorEditor::refreshModelList()
     modelSelector.clear (juce::dontSendNotification);
     auto names = audioProcessor.getAvailableModelNames();
 
+    if (names.size() == 0)
+    {
+        // No models found — show helpful message
+        modelSelector.addItem ("-- No models found. Click LOAD .NAM --", 1);
+        modelSelector.setSelectedItemIndex (0, juce::dontSendNotification);
+        modelBarLabel.setText ("MODEL:", juce::dontSendNotification);
+        return;
+    }
+
     for (int i = 0; i < names.size(); ++i)
         modelSelector.addItem (names[i], i + 1);   // ComboBox IDs start at 1
 
@@ -193,6 +202,10 @@ void NewProjectAudioProcessorEditor::refreshModelList()
         modelSelector.setSelectedItemIndex (currentIdx, juce::dontSendNotification);
     else if (names.size() > 0)
         modelSelector.setSelectedItemIndex (0, juce::dontSendNotification);
+
+    // Show model status
+    modelBarLabel.setText (audioProcessor.isModelLoaded() ? "MODEL:" : "NO MODEL!",
+                           juce::dontSendNotification);
 }
 
 void NewProjectAudioProcessorEditor::onLoadModelFile()

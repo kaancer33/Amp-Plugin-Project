@@ -30,6 +30,10 @@ public:
         setColour (juce::PopupMenu::textColourId,                juce::Colours::white);
         setColour (juce::PopupMenu::highlightedBackgroundColourId, juce::Colours::white);
         setColour (juce::PopupMenu::highlightedTextColourId,     juce::Colours::black);
+        setColour (juce::ComboBox::backgroundColourId,           juce::Colours::black);
+        setColour (juce::ComboBox::textColourId,                 juce::Colours::white);
+        setColour (juce::ComboBox::outlineColourId,              juce::Colours::white);
+        setColour (juce::ComboBox::arrowColourId,                juce::Colours::white);
     }
 
     static juce::Font pixelFont (float height = 13.0f)

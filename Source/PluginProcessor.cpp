@@ -63,6 +63,88 @@ void NewProjectAudioProcessor::loadNAMModel (const juce::File& namFile)
 }
 
 //==============================================================================
+// NAM Model Directory Management
+//==============================================================================
+juce::File NewProjectAudioProcessor::getModelsDirectory() const
+{
+    // Use a persistent "Models" folder in the user's app data
+    auto appData = juce::File::getSpecialLocation (
+        juce::File::userApplicationDataDirectory)
+        .getChildFile ("NewProject").getChildFile ("Models");
+
+    if (!appData.isDirectory())
+        appData.createDirectory();
+
+    // On first run, copy bundled models into the app data directory
+    auto bundledDir = juce::File::getSpecialLocation (
+        juce::File::currentApplicationFile).getParentDirectory().getChildFile ("Models");
+
+    // Also check project source dir during development
+    if (!bundledDir.isDirectory())
+        bundledDir = juce::File ("/Users/ulaskavuncuoglu/Documents/Amp-Plugin-Project-main/Models");
+
+    if (bundledDir.isDirectory())
+    {
+        for (auto& f : bundledDir.findChildFiles (juce::File::findFiles, false, "*.nam"))
+        {
+            auto dest = appData.getChildFile (f.getFileName());
+            if (!dest.existsAsFile())
+                f.copyFileTo (dest);
+        }
+    }
+
+    return appData;
+}
+
+juce::StringArray NewProjectAudioProcessor::getAvailableModelNames() const
+{
+    juce::StringArray names;
+    auto dir = getModelsDirectory();
+    if (dir.isDirectory())
+    {
+        auto files = dir.findChildFiles (juce::File::findFiles, false, "*.nam");
+        files.sort();
+        for (auto& f : files)
+            names.add (f.getFileNameWithoutExtension());
+    }
+    return names;
+}
+
+void NewProjectAudioProcessor::loadModelByName (const juce::String& name)
+{
+    auto dir = getModelsDirectory();
+    auto file = dir.getChildFile (name + ".nam");
+    if (file.existsAsFile())
+        loadNAMModel (file);
+}
+
+void NewProjectAudioProcessor::importNAMModel (const juce::File& sourceFile)
+{
+    if (!sourceFile.existsAsFile() || sourceFile.getFileExtension().toLowerCase() != ".nam")
+        return;
+
+    auto dir = getModelsDirectory();
+    auto dest = dir.getChildFile (sourceFile.getFileName());
+
+    // If file already exists, add a number suffix
+    int counter = 1;
+    while (dest.existsAsFile())
+    {
+        dest = dir.getChildFile (sourceFile.getFileNameWithoutExtension()
+                                 + " (" + juce::String (counter++) + ").nam");
+    }
+
+    sourceFile.copyFileTo (dest);
+    loadNAMModel (dest);
+}
+
+int NewProjectAudioProcessor::getCurrentModelIndex() const
+{
+    auto names = getAvailableModelNames();
+    return names.indexOf (currentModelName);
+}
+
+//==============================================================================
 // Parameter layout — 17 parameters
 //==============================================================================
 juce::AudioProcessorValueTreeState::ParameterLayout

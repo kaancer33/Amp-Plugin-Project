@@ -44,6 +44,13 @@ public:
     bool isModelLoaded() const { return namModel != nullptr; }
     juce::String getModelName() const { return currentModelName; }
 
+    // ── NAM Model Directory Management ───────────────────────────────────
+    juce::File getModelsDirectory() const;
+    juce::StringArray getAvailableModelNames() const;
+    void loadModelByName (const juce::String& name);
+    void importNAMModel (const juce::File& sourceFile);
+    int  getCurrentModelIndex() const;
+
 private:
     // ====================================================================
     //  DSP primitives — all RT-safe, zero heap allocation

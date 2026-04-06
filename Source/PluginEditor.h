@@ -32,7 +32,8 @@ private:
 };
 
 //==============================================================================
-class NewProjectAudioProcessorEditor : public juce::AudioProcessorEditor
+class NewProjectAudioProcessorEditor : public juce::AudioProcessorEditor,
+                                        public juce::FileDragAndDropTarget
 {
 public:
     explicit NewProjectAudioProcessorEditor (NewProjectAudioProcessor&);
@@ -41,11 +42,19 @@ public:
     void paint   (juce::Graphics&) override;
     void resized () override;
 
+    // ── FileDragAndDropTarget ────────────────────────────────────────────
+    bool isInterestedInFileDrag (const juce::StringArray& files) override;
+    void filesDropped (const juce::StringArray& files, int x, int y) override;
+
 private:
     void applySize (int w, int h);
     void refreshPresetLabel();
     void onRename();
     void onDelete();
+
+    // ── NAM Model Selector ──────────────────────────────────────────────
+    void refreshModelList();
+    void onLoadModelFile();
 
     NewProjectAudioProcessor& audioProcessor;
     PixelLookAndFeel laf;
@@ -53,6 +62,11 @@ private:
 
     // ── Effect panels ──────────────────────────────────────────────────────
     EffectPanel distortionPanel, delayPanel, reverbPanel;
+
+    // ── NAM Model selector bar ──────────────────────────────────────────
+    juce::ComboBox   modelSelector;
+    juce::TextButton loadModelBtn  { "LOAD .NAM" };
+    juce::Label      modelBarLabel;
 
     // ── Preset bar ────────────────────────────────────────────────────────
     juce::TextButton prevBtn   { "<" };

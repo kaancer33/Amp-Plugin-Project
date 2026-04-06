@@ -105,17 +105,14 @@ std::unique_ptr<DSP> get_dsp(const std::filesystem::path config_filename, dspDat
   if (!std::filesystem::exists(config_filename))
     throw std::runtime_error("Config file doesn't exist!\n");
   std::ifstream i(config_filename);
+  if (!i.is_open())
+    throw std::runtime_error("Failed to open config file: " + config_filename.string());
   nlohmann::json j;
   i >> j;
-  get_dsp(j, returnedConfig);
 
-  /*Copy to a new dsp_config object for get_dsp below,
-   since not sure if weights actually get modified as being non-const references on some
-   model constructors inside get_dsp(dsp_config& conf).
-   We need to return unmodified version of dsp_config via returnedConfig.*/
-  dspData conf = returnedConfig;
-
-  return get_dsp(conf);
+  // Parse config into returnedConfig, then build model from a copy
+  // (weights may be moved/modified during construction)
+  return get_dsp(j, returnedConfig);
 }
 
 std::unique_ptr<DSP> get_dsp(const nlohmann::json& config, dspData& returnedConfig)

@@ -3,6 +3,7 @@
 
 // NAM Core includes
 #include "NAM/get_dsp.h"
+#include <filesystem>
 
 //==============================================================================
 NewProjectAudioProcessor::NewProjectAudioProcessor()
@@ -56,7 +57,13 @@ void NewProjectAudioProcessor::loadNAMModel (const juce::File& namFile)
 
     try
     {
-        auto newModel = nam::get_dsp (namFile.getFullPathName().toStdString());
+      #if JUCE_WINDOWS
+        // Use wide string on Windows to handle Turkish/Unicode characters in paths
+        std::filesystem::path namPath (namFile.getFullPathName().toWideCharPointer());
+      #else
+        std::filesystem::path namPath (namFile.getFullPathName().toStdString());
+      #endif
+        auto newModel = nam::get_dsp (namPath);
         if (newModel)
         {
             // Initialize model with current sample rate

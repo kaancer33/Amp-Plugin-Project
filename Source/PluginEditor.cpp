@@ -127,6 +127,12 @@ NewProjectAudioProcessorEditor::NewProjectAudioProcessorEditor (NewProjectAudioP
 
     refreshModelList();
 
+    // ── NAM status indicator ────────────────────────────────────────────────
+    namStatusLabel.setJustificationType (juce::Justification::centred);
+    namStatusLabel.setColour (juce::Label::backgroundColourId, juce::Colours::transparentBlack);
+    addAndMakeVisible (namStatusLabel);
+    startTimerHz (4);   // 4 Hz refresh for status
+
     // ── Preset bar ──────────────────────────────────────────────────────────
     presetLbl.setJustificationType (juce::Justification::centred);
     addAndMakeVisible (presetLbl);
@@ -175,7 +181,42 @@ NewProjectAudioProcessorEditor::NewProjectAudioProcessorEditor (NewProjectAudioP
 
 NewProjectAudioProcessorEditor::~NewProjectAudioProcessorEditor()
 {
+    stopTimer();
     setLookAndFeel (nullptr);
+}
+
+void NewProjectAudioProcessorEditor::timerCallback()
+{
+    bool loaded = audioProcessor.isModelLoaded();
+    bool processing = audioProcessor.namIsProcessing.load (std::memory_order_relaxed);
+
+    if (loaded && processing)
+    {
+        namStatusLabel.setText ("NAM", juce::dontSendNotification);
+        namStatusLabel.setColour (juce::Label::textColourId, juce::Colours::lime);
+    }
+    else if (loaded && !processing)
+    {
+        namStatusLabel.setText ("NAM?", juce::dontSendNotification);
+        namStatusLabel.setColour (juce::Label::textColourId, juce::Colours::yellow);
+    }
+    else
+    {
+        namStatusLabel.setText ("FALLBACK", juce::dontSendNotification);
+        namStatusLabel.setColour (juce::Label::textColourId, juce::Colours::red);
+    }
+
+    // Update model bar label with error info if applicable
+    if (!loaded && audioProcessor.lastLoadError.isNotEmpty())
+    {
+        modelBarLabel.setText ("ERR:", juce::dontSendNotification);
+        modelBarLabel.setColour (juce::Label::textColourId, juce::Colours::red);
+    }
+    else
+    {
+        modelBarLabel.setText (loaded ? "MODEL:" : "NO MODEL!", juce::dontSendNotification);
+        modelBarLabel.setColour (juce::Label::textColourId, juce::Colours::white);
+    }
 }
 
 //==============================================================================
@@ -357,14 +398,16 @@ void NewProjectAudioProcessorEditor::resized()
     // ── NAM Model selector bar ──────────────────────────────────────────
     const int mbY = topBarH + 2;
     const int mbH = modelBarH - 4;
-    const int labelW = juce::roundToInt (W * 0.08f);
-    const int loadW  = juce::roundToInt (W * 0.12f);
-    const int comboW = W - labelW - loadW - 14;
+    const int labelW  = juce::roundToInt (W * 0.08f);
+    const int loadW   = juce::roundToInt (W * 0.12f);
+    const int statusW = juce::roundToInt (W * 0.09f);
+    const int comboW  = W - labelW - loadW - statusW - 20;
 
     int mx = 4;
-    modelBarLabel.setBounds (mx, mbY, labelW, mbH);  mx += labelW + 2;
-    modelSelector.setBounds (mx, mbY, comboW, mbH);  mx += comboW + 4;
-    loadModelBtn.setBounds  (mx, mbY, loadW,  mbH);
+    modelBarLabel.setBounds  (mx, mbY, labelW,  mbH);  mx += labelW + 2;
+    modelSelector.setBounds  (mx, mbY, comboW,  mbH);  mx += comboW + 4;
+    loadModelBtn.setBounds   (mx, mbY, loadW,   mbH);  mx += loadW + 4;
+    namStatusLabel.setBounds (mx, mbY, statusW, mbH);
 
     // ── Preset bar ──────────────────────────────────────────────────────
     const int pbY     = topBarH + modelBarH + 2;

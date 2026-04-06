@@ -4,42 +4,49 @@
 const juce::String PresetManager::kExtension = ".npp";
 
 // ── Factory preset definitions ───────────────────────────────────────────────
-// Values tuned for the new distortion range (1–80, skew 0.25) and level range.
+// Drive is 0-1 (mapped to -20..+50 dB internally).
+// Bass/Mid/Treble are 0-1 (0.5 = flat, 0 = -12dB, 1 = +12dB).
+// Gate is dB threshold (-80 = off, -55 = normal, -30 = aggressive).
 const PresetManager::FactoryData PresetManager::kFactory[PresetManager::kNumFactory] =
 {
-    // ── Clean: sparkly clean with a touch of room reverb ──────────────
+    // ── Clean: sparkly clean, flat EQ, gate off ─────────────────────────
     { "Clean", {
-        {"distortion", 1.0f}, {"distTone", 8000.0f}, {"level", 0.85f},
+        {"distDrive", 0.0f}, {"distBass", 0.5f}, {"distMid", 0.5f},
+        {"distTreble", 0.5f}, {"distGate", -80.0f}, {"level", 0.85f},
         {"delayTime", 20.0f}, {"delayFeedback", 0.0f}, {"delayTone", 6000.0f}, {"delayMix", 0.0f},
         {"reverbRoom", 0.25f}, {"reverbPreDelay", 15.0f}, {"reverbDamp", 0.6f}, {"reverbMix", 0.12f},
         {"distortionOn", 0.0f}, {"delayOn", 0.0f}, {"reverbOn", 1.0f}
     }},
-    // ── Crunch: edge-of-breakup rhythm tone with slapback ──────────────
+    // ── Crunch: edge-of-breakup, slight mid push ────────────────────────
     { "Crunch", {
-        {"distortion", 8.0f}, {"distTone", 5000.0f}, {"level", 0.70f},
+        {"distDrive", 0.25f}, {"distBass", 0.45f}, {"distMid", 0.58f},
+        {"distTreble", 0.55f}, {"distGate", -65.0f}, {"level", 0.70f},
         {"delayTime", 120.0f}, {"delayFeedback", 0.25f}, {"delayTone", 5000.0f}, {"delayMix", 0.18f},
         {"reverbRoom", 0.4f}, {"reverbPreDelay", 25.0f}, {"reverbDamp", 0.5f}, {"reverbMix", 0.22f},
         {"distortionOn", 1.0f}, {"delayOn", 1.0f}, {"reverbOn", 1.0f}
     }},
-    // ── Blues Lead: warm, singing sustain with lush delay ──────────────
+    // ── Blues Lead: warm singing sustain ─────────────────────────────────
     { "Blues Lead", {
-        {"distortion", 20.0f}, {"distTone", 3500.0f}, {"level", 0.55f},
+        {"distDrive", 0.40f}, {"distBass", 0.48f}, {"distMid", 0.62f},
+        {"distTreble", 0.45f}, {"distGate", -60.0f}, {"level", 0.55f},
         {"delayTime", 380.0f}, {"delayFeedback", 0.40f}, {"delayTone", 4000.0f}, {"delayMix", 0.28f},
         {"reverbRoom", 0.5f}, {"reverbPreDelay", 30.0f}, {"reverbDamp", 0.45f}, {"reverbMix", 0.28f},
         {"distortionOn", 1.0f}, {"delayOn", 1.0f}, {"reverbOn", 1.0f}
     }},
-    // ── Heavy: tight high-gain rock/metal rhythm ────────────────────────
+    // ── Heavy: tight high-gain metal rhythm ─────────────────────────────
     { "Heavy", {
-        {"distortion", 45.0f}, {"distTone", 3000.0f}, {"level", 0.45f},
+        {"distDrive", 0.65f}, {"distBass", 0.38f}, {"distMid", 0.60f},
+        {"distTreble", 0.52f}, {"distGate", -50.0f}, {"level", 0.45f},
         {"delayTime", 80.0f}, {"delayFeedback", 0.15f}, {"delayTone", 3500.0f}, {"delayMix", 0.08f},
         {"reverbRoom", 0.4f}, {"reverbPreDelay", 15.0f}, {"reverbDamp", 0.65f}, {"reverbMix", 0.15f},
-        {"distortionOn", 1.0f}, {"delayOn", 1.0f}, {"reverbOn", 1.0f}
+        {"distortionOn", 1.0f}, {"delayOn", 0.0f}, {"reverbOn", 1.0f}
     }},
-    // ── Death Metal: brutal high gain, dark, very tight ─────────────────
+    // ── Death Metal: brutal, tight, maximum aggression ──────────────────
     { "Death Metal", {
-        {"distortion", 70.0f}, {"distTone", 2500.0f}, {"level", 0.35f},
+        {"distDrive", 0.85f}, {"distBass", 0.35f}, {"distMid", 0.65f},
+        {"distTreble", 0.48f}, {"distGate", -45.0f}, {"level", 0.35f},
         {"delayTime", 60.0f}, {"delayFeedback", 0.10f}, {"delayTone", 3000.0f}, {"delayMix", 0.05f},
-        {"reverbRoom", 0.35f}, {"reverbPreDelay", 10.0f}, {"reverbDamp", 0.75f}, {"reverbMix", 0.12f},
+        {"reverbRoom", 0.35f}, {"reverbPreDelay", 10.0f}, {"reverbDamp", 0.75f}, {"reverbMix", 0.10f},
         {"distortionOn", 1.0f}, {"delayOn", 0.0f}, {"reverbOn", 1.0f}
     }},
 };
@@ -73,7 +80,6 @@ void PresetManager::loadPreset (int index)
 {
     if (index < 0 || index >= getNumPresets()) return;
     currentIndex = index;
-
     if (isFactory (index))
         applyFactory (index);
     else
@@ -105,13 +111,11 @@ void PresetManager::saveCurrentPreset (std::function<void()> onDone)
             if (result == juce::File{}) return;
 
             auto file = result.withFileExtension (kExtension);
-
             auto state = proc.apvts.copyState();
             std::unique_ptr<juce::XmlElement> xml (state.createXml());
             if (xml) xml->writeTo (file);
 
             scanDirectory (defaultFolder());
-
             for (int i = 0; i < userPresets.size(); ++i)
             {
                 if (userPresets[i].file == file)
@@ -120,7 +124,6 @@ void PresetManager::saveCurrentPreset (std::function<void()> onDone)
                     break;
                 }
             }
-
             if (onDone) onDone();
         });
 }
@@ -131,10 +134,8 @@ void PresetManager::deletePreset (int index)
     if (isFactory (index)) return;
     int ui = index - kNumFactory;
     if (ui < 0 || ui >= userPresets.size()) return;
-
     userPresets[ui].file.deleteFile();
     userPresets.remove (ui);
-
     if (currentIndex >= getNumPresets())
         currentIndex = getNumPresets() - 1;
 }
@@ -145,9 +146,7 @@ void PresetManager::renamePreset (int index, const juce::String& newName)
     if (isFactory (index)) return;
     int ui = index - kNumFactory;
     if (ui < 0 || ui >= userPresets.size()) return;
-
-    auto newFile = userPresets[ui].file.getSiblingFile (
-        newName + kExtension);
+    auto newFile = userPresets[ui].file.getSiblingFile (newName + kExtension);
     if (userPresets[ui].file.moveFileTo (newFile))
     {
         userPresets.getReference (ui).name = newName;
@@ -185,6 +184,7 @@ void PresetManager::applyFactory (int factoryIndex)
     const auto& f = kFactory[factoryIndex];
     for (auto& pv : f.params)
     {
+        if (pv.id == nullptr) break;  // safety: stop at uninitialized entries
         if (auto* p = proc.apvts.getParameter (pv.id))
             p->setValueNotifyingHost (p->convertTo0to1 (pv.value));
     }

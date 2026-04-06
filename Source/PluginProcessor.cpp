@@ -11,21 +11,37 @@ NewProjectAudioProcessor::NewProjectAudioProcessor()
           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "Parameters", createParameterLayout())
 {
-    // Try to load the bundled default model on construction
-    // The model file should be next to the plugin binary or in a known location
+    // Try to load the bundled default model on construction.
+    // Search multiple locations so it works on any OS / build setup.
     auto exeDir = juce::File::getSpecialLocation (
         juce::File::SpecialLocationType::currentApplicationFile).getParentDirectory();
 
-    // Search order: next to binary, then in Models/ subfolder
-    juce::File defaultModel = exeDir.getChildFile ("default.nam");
-    if (!defaultModel.existsAsFile())
-        defaultModel = exeDir.getChildFile ("Models").getChildFile ("default.nam");
-    if (!defaultModel.existsAsFile())
+    juce::File defaultModel;
+
+    // Search order for default.nam:
+    juce::Array<juce::File> searchPaths = {
+        exeDir.getChildFile ("default.nam"),
+        exeDir.getChildFile ("Models").getChildFile ("default.nam"),
+        exeDir.getParentDirectory().getChildFile ("Models").getChildFile ("default.nam"),
+        exeDir.getParentDirectory().getParentDirectory().getChildFile ("Models").getChildFile ("default.nam"),
+        // Walk up from build output to project root (Windows: build/Source/Debug/...)
+        exeDir.getParentDirectory().getParentDirectory().getParentDirectory().getChildFile ("Models").getChildFile ("default.nam"),
+        exeDir.getParentDirectory().getParentDirectory().getParentDirectory().getParentDirectory().getChildFile ("Models").getChildFile ("default.nam"),
+    };
+
+    // Also check the user's app data models directory
+    auto appDataModels = juce::File::getSpecialLocation (
+        juce::File::userApplicationDataDirectory)
+        .getChildFile ("NewProject").getChildFile ("Models").getChildFile ("default.nam");
+    searchPaths.add (appDataModels);
+
+    for (auto& path : searchPaths)
     {
-        // During development: check project source directory
-        auto projectModels = juce::File ("/Users/ulaskavuncuoglu/Documents/Amp-Plugin-Project-main/Models/default.nam");
-        if (projectModels.existsAsFile())
-            defaultModel = projectModels;
+        if (path.existsAsFile())
+        {
+            defaultModel = path;
+            break;
+        }
     }
 
     if (defaultModel.existsAsFile())
@@ -75,15 +91,25 @@ juce::File NewProjectAudioProcessor::getModelsDirectory() const
     if (!appData.isDirectory())
         appData.createDirectory();
 
-    // On first run, copy bundled models into the app data directory
-    auto bundledDir = juce::File::getSpecialLocation (
-        juce::File::currentApplicationFile).getParentDirectory().getChildFile ("Models");
+    // On first run, copy bundled models into the app data directory.
+    // Search multiple locations to find the Models folder.
+    auto exeDir = juce::File::getSpecialLocation (
+        juce::File::currentApplicationFile).getParentDirectory();
 
-    // Also check project source dir during development
-    if (!bundledDir.isDirectory())
-        bundledDir = juce::File ("/Users/ulaskavuncuoglu/Documents/Amp-Plugin-Project-main/Models");
+    juce::File bundledDir;
+    juce::Array<juce::File> searchDirs = {
+        exeDir.getChildFile ("Models"),
+        exeDir.getParentDirectory().getChildFile ("Models"),
+        exeDir.getParentDirectory().getParentDirectory().getChildFile ("Models"),
+        exeDir.getParentDirectory().getParentDirectory().getParentDirectory().getChildFile ("Models"),
+        exeDir.getParentDirectory().getParentDirectory().getParentDirectory().getParentDirectory().getChildFile ("Models"),
+    };
+    for (auto& d : searchDirs)
+    {
+        if (d.isDirectory()) { bundledDir = d; break; }
+    }
 
-    if (bundledDir.isDirectory())
+    if (bundledDir.exists() && bundledDir.isDirectory())
     {
         for (auto& f : bundledDir.findChildFiles (juce::File::findFiles, false, "*.nam"))
         {
@@ -154,7 +180,7 @@ NewProjectAudioProcessor::createParameterLayout()
 
     // ── Bypass toggles ───────────────────────────────────────────────────
     params.push_back (std::make_unique<juce::AudioParameterBool> (
-        "distortionOn", "Distortion On", false));
+        "distortionOn", "Distortion On", true));
     params.push_back (std::make_unique<juce::AudioParameterBool> (
         "delayOn", "Delay On", true));
     params.push_back (std::make_unique<juce::AudioParameterBool> (

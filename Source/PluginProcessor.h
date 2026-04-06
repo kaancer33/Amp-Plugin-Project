@@ -37,10 +37,10 @@ public:
 
 private:
     // ====================================================================
-    //  RT-safe DSP structs — all stack-allocated, zero heap in audio thread
+    //  DSP primitives — all RT-safe, zero heap allocation
     // ====================================================================
 
-    // ── 1-pole filters ─────────────────────────────────────────────────
+    // ── 1-pole LP ──────────────────────────────────────────────────────
     struct OnePoleLP
     {
         float z1 = 0.0f, a = 1.0f, b = 0.0f;
@@ -61,7 +61,7 @@ private:
         void reset() { lp.reset(); }
     };
 
-    // ── Biquad (TDF-II) — supports PeakEQ, Low Shelf, High Shelf ──────
+    // ── Biquad (TDF-II) ────────────────────────────────────────────────
     struct Biquad
     {
         float b0 = 1.0f, b1 = 0.0f, b2 = 0.0f;
@@ -75,19 +75,18 @@ private:
             const float alpha = std::sin (w0) / (2.0f * Q);
             const float cosW  = std::cos (w0);
             const float a0inv = 1.0f / (1.0f + alpha / A);
-            b0 = (1.0f + alpha * A)  * a0inv;
-            b1 = (-2.0f * cosW)      * a0inv;
-            b2 = (1.0f - alpha * A)  * a0inv;
+            b0 = (1.0f + alpha * A) * a0inv;
+            b1 = (-2.0f * cosW)     * a0inv;
+            b2 = (1.0f - alpha * A) * a0inv;
             a1 = b1;
-            a2 = (1.0f - alpha / A)  * a0inv;
+            a2 = (1.0f - alpha / A) * a0inv;
         }
-
         void setLowShelf (float freq, float gainDB, float sr)
         {
             const float A    = std::pow (10.0f, gainDB / 40.0f);
             const float w0   = juce::MathConstants<float>::twoPi * freq / sr;
             const float sinW = std::sin (w0), cosW = std::cos (w0);
-            const float alpha = sinW * 0.5f * std::sqrt (2.0f);  // S=1
+            const float alpha = sinW * 0.5f * std::sqrt (2.0f);
             const float tsa  = 2.0f * std::sqrt (A) * alpha;
             const float a0inv = 1.0f / ((A+1) + (A-1)*cosW + tsa);
             b0 = A * ((A+1) - (A-1)*cosW + tsa) * a0inv;
@@ -96,7 +95,6 @@ private:
             a1 = -2 * ((A-1) + (A+1)*cosW)      * a0inv;
             a2 = ((A+1) + (A-1)*cosW - tsa)     * a0inv;
         }
-
         void setHighShelf (float freq, float gainDB, float sr)
         {
             const float A    = std::pow (10.0f, gainDB / 40.0f);
@@ -111,8 +109,6 @@ private:
             a1 = 2 * ((A-1) - (A+1)*cosW)        * a0inv;
             a2 = ((A+1) - (A-1)*cosW - tsa)      * a0inv;
         }
-
-        // 2nd-order Butterworth HP (Q = 0.7071)
         void setHighPass (float freq, float sr, float Q = 0.7071f)
         {
             const float w0 = juce::MathConstants<float>::twoPi * freq / sr;
@@ -125,8 +121,6 @@ private:
             a1 = -2.0f * cosW          * a0inv;
             a2 = (1.0f - alpha)        * a0inv;
         }
-
-        // 2nd-order Butterworth LP (Q = 0.7071)
         void setLowPass (float freq, float sr, float Q = 0.7071f)
         {
             const float w0 = juce::MathConstants<float>::twoPi * freq / sr;
@@ -139,7 +133,6 @@ private:
             a1 = -2.0f * cosW         * a0inv;
             a2 = (1.0f - alpha)       * a0inv;
         }
-
         float process (float x)
         {
             float y = b0 * x + z1;
@@ -150,15 +143,13 @@ private:
         void reset() { z1 = z2 = 0.0f; }
     };
 
-    // ── Noise Gate (ToobAmp state machine) ─────────────────────────────
-    // States: Released → Attacking → Holding → Releasing → Released
-    // Attack 1ms, Hold 200ms, Release 300ms, hysteresis 4:1
+    // ── Noise Gate (exact ToobAmp state machine) ───────────────────────
     struct NoiseGate
     {
         enum State { kDisabled, kReleased, kReleasing, kAttacking, kHolding };
         State state = kReleased;
-        float gateGain = 0.0f;       // current gate multiplier (0..1)
-        float dx = 0.0f;             // gain change per sample
+        float gateGain = 0.0f;
+        float dx = 0.0f;
         int   holdCount = 0;
         float attackRate = 0.0f;
         float releaseRate = 0.0f;
@@ -169,9 +160,9 @@ private:
 
         void prepare (float sr)
         {
-            attackRate  = 1.0f / (0.001f * sr);   // 1ms
-            releaseRate = 1.0f / (0.3f * sr);     // 300ms
-            holdSamples = (int)(0.2f * sr);       // 200ms
+            attackRate  = 1.0f / (0.001f * sr);
+            releaseRate = 1.0f / (0.3f * sr);
+            holdSamples = (int)(0.2f * sr);
         }
         void setThreshold (float db)
         {
@@ -204,103 +195,151 @@ private:
         }
     };
 
-    // ── Gain Stage (ToobAmp atan + normalization) ──────────────────────
-    // Key insight: output is normalized to ±1 regardless of gain setting.
-    // More gain = more harmonics, NOT more volume.
-    struct GainStageState
+    // ── Atan waveshaper (exact ToobAmp polynomial approximation) ───────
+    // Uses 9th-order polynomial for |x|<=1, identity for |x|>1.
+    // This is NOT std::atan — it's ToobAmp's specific approximation.
+    static inline double toobAtan (double x)
     {
-        float effectiveGain = 1.0f;
-        float bias = 0.3f;
-        float postAdd = 0.0f;
-        float gainScale = 1.0f;
+        if (x > 1.0)
+            return (juce::MathConstants<double>::halfPi) - toobAtanApprox (1.0 / x);
+        else if (x < -1.0)
+            return (-juce::MathConstants<double>::halfPi) - toobAtanApprox (1.0 / x);
+        else
+            return toobAtanApprox (x);
+    }
+    static inline double toobAtanApprox (double x)
+    {
+        double x2 = x * x;
+        return ((((((((0.00286623 * x2 - 0.0161657)
+                    * x2 + 0.0429096)
+                    * x2 - 0.0752896)
+                    * x2 + 0.106563)
+                    * x2 - 0.142089)
+                    * x2 + 0.199936)
+                    * x2 - 0.333331)
+                    * x2 + 1.0) * x;
+    }
 
-        void configure (float driveNorm, float biasVal = 0.3f)
+    // ── GainStage config (exact ToobAmp normalization) ─────────────────
+    // Shared between L/R channels — no per-sample state, only config.
+    struct GainStageConfig
+    {
+        double effectiveGain = 1.0;
+        double bias = 0.0;
+        double postAdd = 0.0;
+        double gainScale = 1.0;
+
+        // Exact ToobAmp: gain 0-1 → Blend(-20,50) → db2a
+        void configure (float driveNorm, float biasVal)
         {
             bias = biasVal;
-            // Map 0-1 → -20..+50 dB (70 dB range, like ToobAmp)
-            float gainDb = -20.0f + driveNorm * 70.0f;
-            effectiveGain = std::pow (10.0f, gainDb / 20.0f);
-            if (effectiveGain < 1e-7f) effectiveGain = 1e-7f;
+            double gainDb = -20.0 + driveNorm * 70.0;
+            effectiveGain = std::pow (10.0, gainDb / 20.0);
+            if (effectiveGain < 1e-7) effectiveGain = 1e-7;
 
-            // DC compensation: output is zero when input is zero
-            float yZero = std::atan (-bias);
-            float yMax  = std::atan ( effectiveGain - bias);
-            float yMin  = std::atan (-effectiveGain - bias);
+            double yZero = toobAtan (-bias);
+            double yMax  = toobAtan ( effectiveGain - bias);
+            double yMin  = toobAtan (-effectiveGain - bias);
             postAdd = -yZero;
-            float maxAbs = std::max (yMax + postAdd, -(yMin + postAdd));
-            if (maxAbs < 1e-7f) maxAbs = 1e-7f;
-            gainScale = 1.0f / maxAbs;
+            double maxVal = std::max (yMax + postAdd, -(yMin + postAdd));
+            if (maxVal < 1e-7) maxVal = 1e-7;
+            gainScale = 1.0 / maxVal;
         }
 
-        inline float process (float x) const
+        // Exact ToobAmp GainFn
+        inline float gainFn (float value) const
         {
-            return (std::atan (x * effectiveGain - bias) + postAdd) * gainScale;
+            return (float)((toobAtan (value * effectiveGain - bias) + postAdd) * gainScale);
+        }
+
+        // Exact ToobAmp Tick: PHASE INVERSION
+        inline float tick (float value) const
+        {
+            return -gainFn (value);
         }
     };
 
-    // ── Power Supply Sag (ToobAmp voltage-divider model) ───────────────
-    // Models real tube amp PSU droop: loud signal → voltage drops →
-    // output compresses.  Creates "breathing" feel and natural dynamics.
+    // ── Power Supply Sag (exact ToobAmp feedback model) ────────────────
+    // TickOutput returns value UNCHANGED.
+    // Sag only affects NEXT sample's input via getInputScale().
     struct SagProcessor
     {
-        float z1 = 0.0f;             // LP filter state
-        float lpA = 0.0f, lpB = 0.0f; // 13 Hz LP coefficients
-        float sagAmount = 1.0f;       // sag factor
+        OnePoleLP powerLP;
         float currentSag = 1.0f;
+        float currentSagD = 1.0f;
+        float sagAf = 1.0f;
+        float sagDAf = 1.0f;
 
-        void prepare (float sr)
+        void prepare (float sr) { powerLP.setCutoff (13.0f, sr); }
+
+        float getInputScale () const { return 1.0f / currentSagD; }
+
+        // Exact ToobAmp TickOutput — returns value UNCHANGED
+        float tickOutput (float value)
         {
-            lpB = std::exp (-juce::MathConstants<float>::twoPi * 13.0f / sr);
-            lpA = 1.0f - lpB;
+            float powerInput = value * currentSagD * currentSag;
+            float power = std::abs (powerLP.process (powerInput * powerInput));
+            currentSag  = 1.0f / (power * (sagAf  - 1.0f) + 1.0f);
+            currentSagD = 1.0f / (power * (sagDAf - 1.0f) + 1.0f);
+            return value;
         }
-        void setSagAmount (float driveNorm)
+
+        void setSag (float driveNorm)
         {
-            // More drive → more sag (auto-scaled)
-            float sagDb = driveNorm * 20.0f;  // up to 20 dB sag at full drive
-            sagAmount = std::pow (10.0f, sagDb / 20.0f);
+            float sagDb  = driveNorm * 30.0f;
+            float sagDDb = driveNorm * 15.0f;
+            sagAf  = std::pow (10.0f, sagDb  / 20.0f);
+            sagDAf = std::pow (10.0f, sagDDb / 20.0f);
         }
-        float process (float x)
+
+        void reset()
         {
-            float power = x * x;
-            z1 = lpA * power + lpB * z1;
-            currentSag = 1.0f / (std::abs (z1) * (sagAmount - 1.0f) + 1.0f);
-            return x * currentSag;
+            powerLP.reset();
+            currentSag = 1.0f; currentSagD = 1.0f;
         }
-        void reset() { z1 = 0.0f; currentSag = 1.0f; }
     };
 
     // ====================================================================
     //  Member variables
     // ====================================================================
 
-    // ── Distortion chain ──────────────────────────────────────────────
+    // ── 4x Oversampling (matching ToobAmp) ────────────────────────────
     juce::dsp::Oversampling<float> oversampling;
 
-    NoiseGate gateL, gateR;                  // noise gate before everything
-    OnePoleHP preHPL, preHPR;                // 100 Hz pre-clip HP
-    Biquad    preEqL, preEqR;                // 900 Hz +8dB mid-boost (the "metal bite")
+    // ── Noise gate ────────────────────────────────────────────────────
+    NoiseGate gateL, gateR;
 
-    GainStageState stage1, stage2, stage3;   // 3 cascaded atan gain stages
-    SagProcessor   sagL, sagR;               // power supply sag simulation
+    // ── Pre-distortion ────────────────────────────────────────────────
+    OnePoleHP preHPL, preHPR;
+    Biquad    preEqL, preEqR;
 
-    // Post-distortion 3-band tone stack
-    Biquad bassEqL,   bassEqR;               // low shelf 200 Hz
-    Biquad midEqL,    midEqR;                // peak EQ 800 Hz
-    Biquad trebleEqL, trebleEqR;             // high shelf 3500 Hz
+    // ── 3 cascaded gain stages (config shared, filters per-channel) ───
+    GainStageConfig stage1Cfg, stage2Cfg, stage3Cfg;
+    bool stage3Active = false;
 
-    // ── Cabinet simulation (SM57 on 4x12 V30 approximation) ───────────
-    // Without cab sim, raw amp output sounds harsh and fizzy.
-    // This filter chain models the frequency response of a guitar speaker
-    // cabinet mic'd with an SM57 — the standard for metal tones.
-    Biquad cabHPL,    cabHPR;                // 2nd-order HP @ 70 Hz (cab box)
-    Biquad cabResoL,  cabResoR;              // +3 dB @ 120 Hz (low-end thump)
-    Biquad cabBoxL,   cabBoxR;               // -3 dB @ 400 Hz (remove boxiness)
-    Biquad cabPresL,  cabPresR;              // +2 dB @ 2.5 kHz (presence)
-    Biquad cabNotchL, cabNotchR;             // -6 dB @ 4.5 kHz (cone breakup dip)
-    Biquad cabLPL,    cabLPR;                // 2nd-order LP @ 5.5 kHz (speaker rolloff)
-    Biquad cabLP2L,   cabLP2R;               // extra LP @ 8 kHz (SM57 proximity)
+    // Per-stage, per-channel filters (exact ToobAmp: HP → LP before each stage)
+    Biquad    s1HPL, s1HPR;     OnePoleLP s1LPL, s1LPR;   // Stage 1
+    Biquad    s2HPL, s2HPR;     OnePoleLP s2LPL, s2LPR;   // Stage 2
+    Biquad    s3HPL, s3HPR;     OnePoleLP s3LPL, s3LPR;   // Stage 3
 
-    juce::SmoothedValue<float> distSmoothed, levelSmoothed;
+    // ── Power supply sag (per-channel) ────────────────────────────────
+    SagProcessor sagL, sagR;
+
+    // ── Post-distortion 3-band tone stack ─────────────────────────────
+    Biquad bassEqL, bassEqR;
+    Biquad midEqL,  midEqR;
+    Biquad trebleEqL, trebleEqR;
+
+    // ── Cabinet simulation (SM57 on 4x12 V30) ────────────────────────
+    Biquad cabHPL,    cabHPR;
+    Biquad cabResoL,  cabResoR;
+    Biquad cabBoxL,   cabBoxR;
+    Biquad cabPresL,  cabPresR;
+    Biquad cabNotchL, cabNotchR;
+    Biquad cabLPL,    cabLPR;
+    Biquad cabLP2L,   cabLP2R;
+
+    juce::SmoothedValue<float> levelSmoothed;
 
     // ── Delay ─────────────────────────────────────────────────────────
     static constexpr float kMaxDelaySeconds   = 2.0f;
@@ -321,10 +360,9 @@ private:
     OnePoleLP reverbHCL, reverbHCR;
     float prevReverbRoom = -1.0f, prevReverbDamp = -1.0f;
 
-    // ── Bypass crossfade (10 ms, click-free) ──────────────────────────
+    // ── Bypass crossfade ──────────────────────────────────────────────
     juce::SmoothedValue<float> distBypassGain, delayBypassGain, reverbBypassGain;
 
-    // ── Temp buffer (pre-allocated) ───────────────────────────────────
     juce::AudioBuffer<float> tempBuffer;
     double currentSampleRate = 44100.0;
 

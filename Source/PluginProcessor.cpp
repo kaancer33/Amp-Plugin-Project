@@ -7,8 +7,8 @@ NewProjectAudioProcessor::NewProjectAudioProcessor()
           .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "Parameters", createParameterLayout()),
-      // 2 channels, order 1 (2x oversampling), IIR half-band
-      oversampling (2, 1,
+      // 2 channels, order 2 (4x oversampling), IIR half-band — exact ToobAmp
+      oversampling (2, 2,
                     juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR,
                     true)
 {
@@ -34,7 +34,7 @@ NewProjectAudioProcessor::createParameterLayout()
 
     // ── Distortion ──────────────────────────────────────────────────────
     // Drive 0-1: internally mapped to -20..+50 dB per gain stage
-    // (like ToobAmp).  Skew 0.4 puts crunch sweet spot at ~30% knob.
+    // (exact ToobAmp).  Skew 0.4 puts crunch sweet spot at ~30% knob.
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
         "distDrive", "Drive",
         juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f, 0.4f), 0.3f));
@@ -109,29 +109,49 @@ void NewProjectAudioProcessor::prepareToPlay (double sampleRate, int samplesPerB
     currentSampleRate = sampleRate;
     const auto sr = (float) sampleRate;
 
-    // ── Distortion ───────────────────────────────────────────────────────
+    // ── 4x Oversampling ─────────────────────────────────────────────────
     oversampling.initProcessing ((size_t) samplesPerBlock);
     setLatencySamples ((int) oversampling.getLatencyInSamples());
 
-    // Noise gate
+    const float osRate = sr * 4.0f;   // 4x oversampled rate
+
+    // ── Noise gate (operates at base rate, before oversampling) ─────────
     gateL.prepare (sr); gateL.reset();
     gateR.prepare (sr); gateR.reset();
 
-    // Pre-distortion HP at 100 Hz (tight low-end for chuggy metal)
+    // ── Pre-distortion HP at 100 Hz (tight low-end for chuggy metal) ───
     preHPL.setCutoff (100.0f, sr); preHPL.reset();
     preHPR.setCutoff (100.0f, sr); preHPR.reset();
 
-    // Pre-distortion mid-boost: +8 dB at 900 Hz, Q=0.8
-    // This is the "metal bite" — 5150/Rectifier-style pre-gain EQ push
+    // ── Pre-distortion mid-boost: +8 dB at 900 Hz, Q=0.8 ──────────────
+    // Metal bite — 5150/Rectifier-style pre-gain EQ push
     preEqL.setPeakEQ (900.0f, 0.8f, 8.0f, sr); preEqL.reset();
     preEqR.setPeakEQ (900.0f, 0.8f, 8.0f, sr); preEqR.reset();
 
-    // Power sag operates at oversampled rate
-    const float osRate = sr * 2.0f;
+    // ── Per-stage filters (at oversampled rate — exact ToobAmp) ────────
+    // Stage 1: HP 80 Hz, LP 12 kHz
+    s1HPL.setHighPass (80.0f, osRate);  s1HPL.reset();
+    s1HPR.setHighPass (80.0f, osRate);  s1HPR.reset();
+    s1LPL.setCutoff (12000.0f, osRate); s1LPL.reset();
+    s1LPR.setCutoff (12000.0f, osRate); s1LPR.reset();
+
+    // Stage 2: HP 60 Hz, LP 10 kHz
+    s2HPL.setHighPass (60.0f, osRate);  s2HPL.reset();
+    s2HPR.setHighPass (60.0f, osRate);  s2HPR.reset();
+    s2LPL.setCutoff (10000.0f, osRate); s2LPL.reset();
+    s2LPR.setCutoff (10000.0f, osRate); s2LPR.reset();
+
+    // Stage 3: HP 50 Hz, LP 8 kHz
+    s3HPL.setHighPass (50.0f, osRate);  s3HPL.reset();
+    s3HPR.setHighPass (50.0f, osRate);  s3HPR.reset();
+    s3LPL.setCutoff (8000.0f, osRate);  s3LPL.reset();
+    s3LPR.setCutoff (8000.0f, osRate);  s3LPR.reset();
+
+    // ── Power supply sag (at oversampled rate) ─────────────────────────
     sagL.prepare (osRate); sagL.reset();
     sagR.prepare (osRate); sagR.reset();
 
-    // Post-distortion 3-band tone stack (flat defaults)
+    // ── Post-distortion 3-band tone stack (flat defaults) ──────────────
     bassEqL.setLowShelf (200.0f, 0.0f, sr);    bassEqL.reset();
     bassEqR.setLowShelf (200.0f, 0.0f, sr);    bassEqR.reset();
     midEqL.setPeakEQ (800.0f, 0.7f, 0.0f, sr); midEqL.reset();
@@ -139,26 +159,22 @@ void NewProjectAudioProcessor::prepareToPlay (double sampleRate, int samplesPerB
     trebleEqL.setHighShelf (3500.0f, 0.0f, sr); trebleEqL.reset();
     trebleEqR.setHighShelf (3500.0f, 0.0f, sr); trebleEqR.reset();
 
-    // ── Cabinet simulation (SM57 on 4x12 V30) ───────────────────────────
-    // This is THE most important thing for realistic tone.
-    // Without it, even Neural DSP would sound like garbage.
-    // Models: speaker resonance, cone breakup, mic proximity, rolloff.
-    cabHPL.setHighPass (70.0f, sr);             cabHPL.reset();
-    cabHPR.setHighPass (70.0f, sr);             cabHPR.reset();
-    cabResoL.setPeakEQ (120.0f, 1.5f, 3.0f, sr); cabResoL.reset();
-    cabResoR.setPeakEQ (120.0f, 1.5f, 3.0f, sr); cabResoR.reset();
-    cabBoxL.setPeakEQ (400.0f, 0.8f, -3.0f, sr); cabBoxL.reset();
-    cabBoxR.setPeakEQ (400.0f, 0.8f, -3.0f, sr); cabBoxR.reset();
+    // ── Cabinet simulation (SM57 on 4x12 V30) ──────────────────────────
+    cabHPL.setHighPass (70.0f, sr);               cabHPL.reset();
+    cabHPR.setHighPass (70.0f, sr);               cabHPR.reset();
+    cabResoL.setPeakEQ (120.0f, 1.5f, 3.0f, sr);  cabResoL.reset();
+    cabResoR.setPeakEQ (120.0f, 1.5f, 3.0f, sr);  cabResoR.reset();
+    cabBoxL.setPeakEQ (400.0f, 0.8f, -3.0f, sr);  cabBoxL.reset();
+    cabBoxR.setPeakEQ (400.0f, 0.8f, -3.0f, sr);  cabBoxR.reset();
     cabPresL.setPeakEQ (2500.0f, 1.2f, 2.0f, sr); cabPresL.reset();
     cabPresR.setPeakEQ (2500.0f, 1.2f, 2.0f, sr); cabPresR.reset();
     cabNotchL.setPeakEQ (4500.0f, 2.0f, -6.0f, sr); cabNotchL.reset();
     cabNotchR.setPeakEQ (4500.0f, 2.0f, -6.0f, sr); cabNotchR.reset();
-    cabLPL.setLowPass (5500.0f, sr);            cabLPL.reset();
-    cabLPR.setLowPass (5500.0f, sr);            cabLPR.reset();
-    cabLP2L.setLowPass (8000.0f, sr, 0.5f);     cabLP2L.reset();
-    cabLP2R.setLowPass (8000.0f, sr, 0.5f);     cabLP2R.reset();
+    cabLPL.setLowPass (5500.0f, sr);              cabLPL.reset();
+    cabLPR.setLowPass (5500.0f, sr);              cabLPR.reset();
+    cabLP2L.setLowPass (8000.0f, sr, 0.5f);       cabLP2L.reset();
+    cabLP2R.setLowPass (8000.0f, sr, 0.5f);       cabLP2R.reset();
 
-    distSmoothed.reset (sampleRate, 0.05);
     levelSmoothed.reset (sampleRate, 0.05);
 
     // ── Delay ────────────────────────────────────────────────────────────
@@ -207,6 +223,9 @@ void NewProjectAudioProcessor::releaseResources()
     reverb.reset();
     preHPL.reset();       preHPR.reset();
     preEqL.reset();       preEqR.reset();
+    s1HPL.reset(); s1HPR.reset(); s1LPL.reset(); s1LPR.reset();
+    s2HPL.reset(); s2HPR.reset(); s2LPL.reset(); s2LPR.reset();
+    s3HPL.reset(); s3HPR.reset(); s3LPL.reset(); s3LPR.reset();
     bassEqL.reset();      bassEqR.reset();
     midEqL.reset();       midEqR.reset();
     trebleEqL.reset();    trebleEqR.reset();
@@ -278,15 +297,15 @@ void NewProjectAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     reverbBypassGain.setTargetValue(reverbOn     ? 1.0f : 0.0f);
 
     //======================================================================
-    //  1. DISTORTION — ToobAmp-inspired architecture
+    //  1. DISTORTION — Exact ToobAmp architecture
     //
     //     NoiseGate → PreHP(100Hz) → PreEQ(+8dB @900Hz) →
-    //     2x Oversample →
-    //       GainStage1 (atan + normalize, drive-mapped) →
-    //       GainStage2 (atan + normalize, 70% of drive) →
-    //       GainStage3 (atan + normalize, kicks in >33% drive) →
-    //       Power Sag (PSU droop simulation) →
-    //     2x Downsample →
+    //     4x Oversample →
+    //       HP1→LP1→GainStage1.tick() (atan + normalize + phase invert) →
+    //       HP2→LP2→GainStage2.tick() →
+    //       HP3→LP3→GainStage3.tick() (kicks in >33% drive) →
+    //       Sag feedback (tickOutput: returns unchanged, updates state) →
+    //     4x Downsample →
     //     Bass Shelf(200Hz) → Mid Peak(800Hz) → Treble Shelf(3.5kHz) →
     //     Cabinet Sim (SM57/4x12/V30) → Level
     //======================================================================
@@ -296,19 +315,19 @@ void NewProjectAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         tempBuffer.copyFrom (0, 0, buffer, 0, 0, numSamples);
         tempBuffer.copyFrom (1, 0, buffer, 1, 0, numSamples);
 
-        // ── Configure gain stages (like ToobAmp UpdateControls) ─────────
-        // Stage 1: full drive
-        stage1.configure (distDrive, 0.3f);
-        // Stage 2: 70% of drive (slightly less aggressive)
-        stage2.configure (distDrive * 0.7f, 0.2f);
-        // Stage 3: kicks in above 33% drive, max at 100%
+        // ── Configure gain stages (exact ToobAmp UpdateControls) ────────
+        // Stage 1: full drive, bias 0.3
+        stage1Cfg.configure (distDrive, 0.3f);
+        // Stage 2: 70% of drive, bias 0.2
+        stage2Cfg.configure (distDrive * 0.7f, 0.2f);
+        // Stage 3: kicks in above 33% drive, bias 0.15
         float s3drive = juce::jmax (0.0f, distDrive * 1.5f - 0.5f);
-        stage3.configure (s3drive, 0.15f);
-        const bool stage3Active = (s3drive > 0.01f);
+        stage3Cfg.configure (s3drive, 0.15f);
+        stage3Active = (s3drive > 0.01f);
 
         // Configure power sag (auto-scales with drive)
-        sagL.setSagAmount (distDrive);
-        sagR.setSagAmount (distDrive);
+        sagL.setSag (distDrive);
+        sagR.setSag (distDrive);
 
         // Configure noise gate
         gateL.setThreshold (distGate);
@@ -346,7 +365,11 @@ void NewProjectAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             R[i] = preEqR.process (R[i]);
         }
 
-        // ─── 2x Oversampling + cascaded gain stages + sag ──────────────
+        // ─── 4x Oversampling + cascaded gain stages + sag ──────────────
+        // Exact ToobAmp signal flow per oversampled sample:
+        //   input × sag.getInputScale() → HP → LP → GainStage.tick()
+        //   (repeat for each stage)
+        //   sag.tickOutput(finalOutput) — returns unchanged, updates state
         float* channels[2] = { L, R };
         juce::dsp::AudioBlock<float> distBlock (channels, 2, (size_t) numSamples);
         auto osBlock = oversampling.processSamplesUp (distBlock);
@@ -357,29 +380,28 @@ void NewProjectAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
         for (int i = 0; i < osN; ++i)
         {
-            float xL = osL[i], xR = osR[i];
+            float xL = osL[i];
+            float xR = osR[i];
 
-            // Stage 1: primary saturation
-            xL = stage1.process (xL);
-            xR = stage1.process (xR);
+            // ── Stage 1: sag input scaling → HP → LP → tick (atan + phase invert)
+            float x1L = stage1Cfg.tick (s1LPL.process (s1HPL.process (xL * sagL.getInputScale())));
+            float x1R = stage1Cfg.tick (s1LPR.process (s1HPR.process (xR * sagR.getInputScale())));
 
-            // Stage 2: harmonic stacking (2nd + 3rd → 5th, 7th)
-            xL = stage2.process (xL);
-            xR = stage2.process (xR);
+            // ── Stage 2: HP → LP → tick
+            float x2L = stage2Cfg.tick (s2LPL.process (s2HPL.process (x1L)));
+            float x2R = stage2Cfg.tick (s2LPR.process (s2HPR.process (x1R)));
 
-            // Stage 3: extreme harmonics (death metal territory)
+            // ── Stage 3: HP → LP → tick (only if drive > 33%)
+            float x3L = x2L, x3R = x2R;
             if (stage3Active)
             {
-                xL = stage3.process (xL);
-                xR = stage3.process (xR);
+                x3L = stage3Cfg.tick (s3LPL.process (s3HPL.process (x2L)));
+                x3R = stage3Cfg.tick (s3LPR.process (s3HPR.process (x2R)));
             }
 
-            // Power supply sag: loud signal → output compresses
-            xL = sagL.process (xL);
-            xR = sagR.process (xR);
-
-            osL[i] = xL;
-            osR[i] = xR;
+            // ── Sag feedback: returns value UNCHANGED, updates internal state
+            osL[i] = sagL.tickOutput (x3L);
+            osR[i] = sagR.tickOutput (x3R);
         }
 
         oversampling.processSamplesDown (distBlock);
@@ -402,9 +424,6 @@ void NewProjectAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         }
 
         // ─── Cabinet simulation (SM57 on 4x12 V30) ────────────────────
-        // This is what makes it sound like a real amp, not a raw preamp.
-        // HP removes sub → resonance adds thump → box cut cleans mids →
-        // presence adds bite → notch models cone breakup → LP kills fizz.
         for (int i = 0; i < numSamples; ++i)
         {
             L[i] = cabHPL.process (L[i]);
@@ -460,7 +479,6 @@ void NewProjectAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     }
     else
     {
-        distSmoothed.skip (numSamples);
         levelSmoothed.skip (numSamples);
         distBypassGain.skip (numSamples);
     }

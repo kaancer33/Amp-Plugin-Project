@@ -1,5 +1,9 @@
 #pragma once
 #include <JuceHeader.h>
+#include <memory>
+
+// Forward declaration — NAM core
+namespace nam { class DSP; }
 
 class NewProjectAudioProcessor : public juce::AudioProcessor
 {
@@ -34,6 +38,11 @@ public:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
     void syncDSPToParameters();
+
+    // ── NAM Model Loading ────────────────────────────────────────────────
+    void loadNAMModel (const juce::File& namFile);
+    bool isModelLoaded() const { return namModel != nullptr; }
+    juce::String getModelName() const { return currentModelName; }
 
 private:
     // ====================================================================
@@ -195,142 +204,31 @@ private:
         }
     };
 
-    // ── Atan waveshaper (exact ToobAmp polynomial approximation) ───────
-    // Uses 9th-order polynomial for |x|<=1, identity for |x|>1.
-    // This is NOT std::atan — it's ToobAmp's specific approximation.
-    static inline double toobAtan (double x)
-    {
-        if (x > 1.0)
-            return (juce::MathConstants<double>::halfPi) - toobAtanApprox (1.0 / x);
-        else if (x < -1.0)
-            return (-juce::MathConstants<double>::halfPi) - toobAtanApprox (1.0 / x);
-        else
-            return toobAtanApprox (x);
-    }
-    static inline double toobAtanApprox (double x)
-    {
-        double x2 = x * x;
-        return ((((((((0.00286623 * x2 - 0.0161657)
-                    * x2 + 0.0429096)
-                    * x2 - 0.0752896)
-                    * x2 + 0.106563)
-                    * x2 - 0.142089)
-                    * x2 + 0.199936)
-                    * x2 - 0.333331)
-                    * x2 + 1.0) * x;
-    }
-
-    // ── GainStage config (exact ToobAmp normalization) ─────────────────
-    // Shared between L/R channels — no per-sample state, only config.
-    struct GainStageConfig
-    {
-        double effectiveGain = 1.0;
-        double bias = 0.0;
-        double postAdd = 0.0;
-        double gainScale = 1.0;
-
-        // Exact ToobAmp: gain 0-1 → Blend(-20,50) → db2a
-        void configure (float driveNorm, float biasVal)
-        {
-            bias = biasVal;
-            double gainDb = -20.0 + driveNorm * 70.0;
-            effectiveGain = std::pow (10.0, gainDb / 20.0);
-            if (effectiveGain < 1e-7) effectiveGain = 1e-7;
-
-            double yZero = toobAtan (-bias);
-            double yMax  = toobAtan ( effectiveGain - bias);
-            double yMin  = toobAtan (-effectiveGain - bias);
-            postAdd = -yZero;
-            double maxVal = std::max (yMax + postAdd, -(yMin + postAdd));
-            if (maxVal < 1e-7) maxVal = 1e-7;
-            gainScale = 1.0 / maxVal;
-        }
-
-        // Exact ToobAmp GainFn
-        inline float gainFn (float value) const
-        {
-            return (float)((toobAtan (value * effectiveGain - bias) + postAdd) * gainScale);
-        }
-
-        // Exact ToobAmp Tick: PHASE INVERSION
-        inline float tick (float value) const
-        {
-            return -gainFn (value);
-        }
-    };
-
-    // ── Power Supply Sag (exact ToobAmp feedback model) ────────────────
-    // TickOutput returns value UNCHANGED.
-    // Sag only affects NEXT sample's input via getInputScale().
-    struct SagProcessor
-    {
-        OnePoleLP powerLP;
-        float currentSag = 1.0f;
-        float currentSagD = 1.0f;
-        float sagAf = 1.0f;
-        float sagDAf = 1.0f;
-
-        void prepare (float sr) { powerLP.setCutoff (13.0f, sr); }
-
-        float getInputScale () const { return 1.0f / currentSagD; }
-
-        // Exact ToobAmp TickOutput — returns value UNCHANGED
-        float tickOutput (float value)
-        {
-            float powerInput = value * currentSagD * currentSag;
-            float power = std::abs (powerLP.process (powerInput * powerInput));
-            currentSag  = 1.0f / (power * (sagAf  - 1.0f) + 1.0f);
-            currentSagD = 1.0f / (power * (sagDAf - 1.0f) + 1.0f);
-            return value;
-        }
-
-        void setSag (float driveNorm)
-        {
-            float sagDb  = driveNorm * 30.0f;
-            float sagDDb = driveNorm * 15.0f;
-            sagAf  = std::pow (10.0f, sagDb  / 20.0f);
-            sagDAf = std::pow (10.0f, sagDDb / 20.0f);
-        }
-
-        void reset()
-        {
-            powerLP.reset();
-            currentSag = 1.0f; currentSagD = 1.0f;
-        }
-    };
-
     // ====================================================================
     //  Member variables
     // ====================================================================
 
-    // ── 4x Oversampling (matching ToobAmp) ────────────────────────────
-    juce::dsp::Oversampling<float> oversampling;
+    // ── Neural Amp Model (core inference engine) ─────────────────────
+    std::unique_ptr<nam::DSP> namModel;
+    juce::String currentModelName { "No Model" };
+    juce::SpinLock namModelLock;   // protects hot-swap
+
+    // ── NAM internal buffers (double precision — NAM expects double) ──
+    std::vector<double> namInputBuffer;
+    std::vector<double> namOutputBuffer;
 
     // ── Noise gate ────────────────────────────────────────────────────
     NoiseGate gateL, gateR;
 
-    // ── Pre-distortion ────────────────────────────────────────────────
-    OnePoleHP preHPL, preHPR;
-    Biquad    preEqL, preEqR;
+    // ── Pre-NAM input conditioning ───────────────────────────────────
+    OnePoleHP preHPL, preHPR;   // tighten low-end before neural net
 
-    // ── 3 cascaded gain stages (config shared, filters per-channel) ───
-    GainStageConfig stage1Cfg, stage2Cfg, stage3Cfg;
-    bool stage3Active = false;
-
-    // Per-stage, per-channel filters (exact ToobAmp: HP → LP before each stage)
-    Biquad    s1HPL, s1HPR;     OnePoleLP s1LPL, s1LPR;   // Stage 1
-    Biquad    s2HPL, s2HPR;     OnePoleLP s2LPL, s2LPR;   // Stage 2
-    Biquad    s3HPL, s3HPR;     OnePoleLP s3LPL, s3LPR;   // Stage 3
-
-    // ── Power supply sag (per-channel) ────────────────────────────────
-    SagProcessor sagL, sagR;
-
-    // ── Post-distortion 3-band tone stack ─────────────────────────────
+    // ── Post-NAM 3-band tone stack ───────────────────────────────────
     Biquad bassEqL, bassEqR;
     Biquad midEqL,  midEqR;
     Biquad trebleEqL, trebleEqR;
 
-    // ── Cabinet simulation (SM57 on 4x12 V30) ────────────────────────
+    // ── Cabinet simulation (SM57 on 4x12 V30) ───────────────────────
     Biquad cabHPL,    cabHPR;
     Biquad cabResoL,  cabResoR;
     Biquad cabBoxL,   cabBoxR;

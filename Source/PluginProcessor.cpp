@@ -1,20 +1,66 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
+// NAM Core includes
+#include "NAM/get_dsp.h"
+
 //==============================================================================
 NewProjectAudioProcessor::NewProjectAudioProcessor()
     : AudioProcessor (BusesProperties()
           .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
-      apvts (*this, nullptr, "Parameters", createParameterLayout()),
-      // 2 channels, order 2 (4x oversampling), IIR half-band — exact ToobAmp
-      oversampling (2, 2,
-                    juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR,
-                    true)
+      apvts (*this, nullptr, "Parameters", createParameterLayout())
 {
+    // Try to load the bundled default model on construction
+    // The model file should be next to the plugin binary or in a known location
+    auto exeDir = juce::File::getSpecialLocation (
+        juce::File::SpecialLocationType::currentApplicationFile).getParentDirectory();
+
+    // Search order: next to binary, then in Models/ subfolder
+    juce::File defaultModel = exeDir.getChildFile ("default.nam");
+    if (!defaultModel.existsAsFile())
+        defaultModel = exeDir.getChildFile ("Models").getChildFile ("default.nam");
+    if (!defaultModel.existsAsFile())
+    {
+        // During development: check project source directory
+        auto projectModels = juce::File ("/Users/ulaskavuncuoglu/Documents/Amp-Plugin-Project-main/Models/default.nam");
+        if (projectModels.existsAsFile())
+            defaultModel = projectModels;
+    }
+
+    if (defaultModel.existsAsFile())
+        loadNAMModel (defaultModel);
 }
 
 NewProjectAudioProcessor::~NewProjectAudioProcessor() {}
+
+//==============================================================================
+void NewProjectAudioProcessor::loadNAMModel (const juce::File& namFile)
+{
+    if (!namFile.existsAsFile())
+        return;
+
+    try
+    {
+        auto newModel = nam::get_dsp (namFile.getFullPathName().toStdString());
+        if (newModel)
+        {
+            // Initialize model with current sample rate
+            const double sr = (currentSampleRate > 0) ? currentSampleRate : 48000.0;
+            const int maxBuf = 4096;
+            newModel->ResetAndPrewarm (sr, maxBuf);
+
+            // Hot-swap under lock
+            const juce::SpinLock::ScopedLockType lock (namModelLock);
+            namModel = std::move (newModel);
+            currentModelName = namFile.getFileNameWithoutExtension();
+        }
+    }
+    catch (const std::exception& e)
+    {
+        DBG ("NAM model load failed: " << e.what());
+    }
+}
 
 //==============================================================================
 // Parameter layout — 17 parameters
@@ -32,15 +78,13 @@ NewProjectAudioProcessor::createParameterLayout()
     params.push_back (std::make_unique<juce::AudioParameterBool> (
         "reverbOn", "Reverb On", true));
 
-    // ── Distortion ──────────────────────────────────────────────────────
-    // Drive 0-1: internally mapped to -20..+50 dB per gain stage
-    // (exact ToobAmp).  Skew 0.4 puts crunch sweet spot at ~30% knob.
+    // ── Distortion (NAM) ────────────────────────────────────────────────
+    // Drive: input gain into the neural network (0-1 → -12..+12 dB)
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
         "distDrive", "Drive",
         juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f, 0.4f), 0.3f));
 
-    // 3-band tone stack (post-distortion, like amp tone controls)
-    // 0.0 = -12 dB, 0.5 = flat, 1.0 = +12 dB
+    // 3-band tone stack (post-NAM)
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
         "distBass", "Bass",
         juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.5f));
@@ -109,49 +153,26 @@ void NewProjectAudioProcessor::prepareToPlay (double sampleRate, int samplesPerB
     currentSampleRate = sampleRate;
     const auto sr = (float) sampleRate;
 
-    // ── 4x Oversampling ─────────────────────────────────────────────────
-    oversampling.initProcessing ((size_t) samplesPerBlock);
-    setLatencySamples ((int) oversampling.getLatencyInSamples());
+    // ── NAM model: reset to current sample rate ─────────────────────────
+    {
+        const juce::SpinLock::ScopedLockType lock (namModelLock);
+        if (namModel)
+            namModel->ResetAndPrewarm (sampleRate, samplesPerBlock);
+    }
 
-    const float osRate = sr * 4.0f;   // 4x oversampled rate
+    // ── NAM internal buffers (double precision) ─────────────────────────
+    namInputBuffer.resize ((size_t) samplesPerBlock, 0.0);
+    namOutputBuffer.resize ((size_t) samplesPerBlock, 0.0);
 
-    // ── Noise gate (operates at base rate, before oversampling) ─────────
+    // ── Noise gate ──────────────────────────────────────────────────────
     gateL.prepare (sr); gateL.reset();
     gateR.prepare (sr); gateR.reset();
 
-    // ── Pre-distortion HP at 100 Hz (tight low-end for chuggy metal) ───
-    preHPL.setCutoff (100.0f, sr); preHPL.reset();
-    preHPR.setCutoff (100.0f, sr); preHPR.reset();
+    // ── Pre-NAM HP at 80 Hz (remove sub-bass rumble before neural net) ──
+    preHPL.setCutoff (80.0f, sr); preHPL.reset();
+    preHPR.setCutoff (80.0f, sr); preHPR.reset();
 
-    // ── Pre-distortion mid-boost: +8 dB at 900 Hz, Q=0.8 ──────────────
-    // Metal bite — 5150/Rectifier-style pre-gain EQ push
-    preEqL.setPeakEQ (900.0f, 0.8f, 8.0f, sr); preEqL.reset();
-    preEqR.setPeakEQ (900.0f, 0.8f, 8.0f, sr); preEqR.reset();
-
-    // ── Per-stage filters (at oversampled rate — exact ToobAmp) ────────
-    // Stage 1: HP 80 Hz, LP 12 kHz
-    s1HPL.setHighPass (80.0f, osRate);  s1HPL.reset();
-    s1HPR.setHighPass (80.0f, osRate);  s1HPR.reset();
-    s1LPL.setCutoff (12000.0f, osRate); s1LPL.reset();
-    s1LPR.setCutoff (12000.0f, osRate); s1LPR.reset();
-
-    // Stage 2: HP 60 Hz, LP 10 kHz
-    s2HPL.setHighPass (60.0f, osRate);  s2HPL.reset();
-    s2HPR.setHighPass (60.0f, osRate);  s2HPR.reset();
-    s2LPL.setCutoff (10000.0f, osRate); s2LPL.reset();
-    s2LPR.setCutoff (10000.0f, osRate); s2LPR.reset();
-
-    // Stage 3: HP 50 Hz, LP 8 kHz
-    s3HPL.setHighPass (50.0f, osRate);  s3HPL.reset();
-    s3HPR.setHighPass (50.0f, osRate);  s3HPR.reset();
-    s3LPL.setCutoff (8000.0f, osRate);  s3LPL.reset();
-    s3LPR.setCutoff (8000.0f, osRate);  s3LPR.reset();
-
-    // ── Power supply sag (at oversampled rate) ─────────────────────────
-    sagL.prepare (osRate); sagL.reset();
-    sagR.prepare (osRate); sagR.reset();
-
-    // ── Post-distortion 3-band tone stack (flat defaults) ──────────────
+    // ── Post-NAM 3-band tone stack (flat defaults) ──────────────────────
     bassEqL.setLowShelf (200.0f, 0.0f, sr);    bassEqL.reset();
     bassEqR.setLowShelf (200.0f, 0.0f, sr);    bassEqR.reset();
     midEqL.setPeakEQ (800.0f, 0.7f, 0.0f, sr); midEqL.reset();
@@ -217,15 +238,10 @@ void NewProjectAudioProcessor::syncDSPToParameters() { /* read live in processBl
 
 void NewProjectAudioProcessor::releaseResources()
 {
-    oversampling.reset();
     delayL.reset();       delayR.reset();
     preDelayL.reset();    preDelayR.reset();
     reverb.reset();
     preHPL.reset();       preHPR.reset();
-    preEqL.reset();       preEqR.reset();
-    s1HPL.reset(); s1HPR.reset(); s1LPL.reset(); s1LPR.reset();
-    s2HPL.reset(); s2HPR.reset(); s2LPL.reset(); s2LPR.reset();
-    s3HPL.reset(); s3HPR.reset(); s3LPL.reset(); s3LPR.reset();
     bassEqL.reset();      bassEqR.reset();
     midEqL.reset();       midEqR.reset();
     trebleEqL.reset();    trebleEqR.reset();
@@ -239,7 +255,6 @@ void NewProjectAudioProcessor::releaseResources()
     delayFbLPL.reset();   delayFbLPR.reset();
     reverbHCL.reset();    reverbHCR.reset();
     gateL.reset();        gateR.reset();
-    sagL.reset();         sagR.reset();
 }
 
 //==============================================================================
@@ -261,7 +276,7 @@ void NewProjectAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     juce::ScopedNoDenormals noDenormals;
     const int numSamples = buffer.getNumSamples();
 
-    // Mono → stereo
+    // Mono -> stereo
     if (getTotalNumInputChannels() < 2 && buffer.getNumChannels() >= 2)
         buffer.copyFrom (1, 0, buffer, 0, 0, numSamples);
 
@@ -297,15 +312,10 @@ void NewProjectAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     reverbBypassGain.setTargetValue(reverbOn     ? 1.0f : 0.0f);
 
     //======================================================================
-    //  1. DISTORTION — Exact ToobAmp architecture
+    //  1. DISTORTION — Neural Amp Modeler (Mesa Boogie neural inference)
     //
-    //     NoiseGate → PreHP(100Hz) → PreEQ(+8dB @900Hz) →
-    //     4x Oversample →
-    //       HP1→LP1→GainStage1.tick() (atan + normalize + phase invert) →
-    //       HP2→LP2→GainStage2.tick() →
-    //       HP3→LP3→GainStage3.tick() (kicks in >33% drive) →
-    //       Sag feedback (tickOutput: returns unchanged, updates state) →
-    //     4x Downsample →
+    //     NoiseGate → PreHP(80Hz) → Drive Gain →
+    //     NAM Neural Inference (mono, process L+R separately) →
     //     Bass Shelf(200Hz) → Mid Peak(800Hz) → Treble Shelf(3.5kHz) →
     //     Cabinet Sim (SM57/4x12/V30) → Level
     //======================================================================
@@ -315,25 +325,11 @@ void NewProjectAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         tempBuffer.copyFrom (0, 0, buffer, 0, 0, numSamples);
         tempBuffer.copyFrom (1, 0, buffer, 1, 0, numSamples);
 
-        // ── Configure gain stages (exact ToobAmp UpdateControls) ────────
-        // Stage 1: full drive, bias 0.3
-        stage1Cfg.configure (distDrive, 0.3f);
-        // Stage 2: 70% of drive, bias 0.2
-        stage2Cfg.configure (distDrive * 0.7f, 0.2f);
-        // Stage 3: kicks in above 33% drive, bias 0.15
-        float s3drive = juce::jmax (0.0f, distDrive * 1.5f - 0.5f);
-        stage3Cfg.configure (s3drive, 0.15f);
-        stage3Active = (s3drive > 0.01f);
-
-        // Configure power sag (auto-scales with drive)
-        sagL.setSag (distDrive);
-        sagR.setSag (distDrive);
-
         // Configure noise gate
         gateL.setThreshold (distGate);
         gateR.setThreshold (distGate);
 
-        // Configure tone stack: 0-1 → -12..+12 dB
+        // Configure tone stack: 0-1 -> -12..+12 dB
         const float bassDb   = (distBass   - 0.5f) * 24.0f;
         const float midDb    = (distMid    - 0.5f) * 24.0f;
         const float trebleDb = (distTreble - 0.5f) * 24.0f;
@@ -344,6 +340,10 @@ void NewProjectAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         trebleEqL.setHighShelf(3500.0f, trebleDb, sr);
         trebleEqR.setHighShelf(3500.0f, trebleDb, sr);
 
+        // ─── Drive gain: 0-1 -> -12..+12 dB input boost into NAM ────────
+        const float driveDb = (distDrive - 0.5f) * 24.0f;
+        const float driveGain = std::pow (10.0f, driveDb / 20.0f);
+
         // ─── Noise Gate ─────────────────────────────────────────────────
         for (int i = 0; i < numSamples; ++i)
         {
@@ -351,62 +351,56 @@ void NewProjectAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             R[i] = gateR.process (R[i]);
         }
 
-        // ─── Pre-distortion HP (100 Hz) ─────────────────────────────────
+        // ─── Pre-NAM HP (80 Hz) ────────────────────────────────────────
         for (int i = 0; i < numSamples; ++i)
         {
             L[i] = preHPL.process (L[i]);
             R[i] = preHPR.process (R[i]);
         }
 
-        // ─── Pre-distortion mid-boost EQ ────────────────────────────────
+        // ─── Apply drive gain ──────────────────────────────────────────
         for (int i = 0; i < numSamples; ++i)
         {
-            L[i] = preEqL.process (L[i]);
-            R[i] = preEqR.process (R[i]);
+            L[i] *= driveGain;
+            R[i] *= driveGain;
         }
 
-        // ─── 4x Oversampling + cascaded gain stages + sag ──────────────
-        // Exact ToobAmp signal flow per oversampled sample:
-        //   input × sag.getInputScale() → HP → LP → GainStage.tick()
-        //   (repeat for each stage)
-        //   sag.tickOutput(finalOutput) — returns unchanged, updates state
-        float* channels[2] = { L, R };
-        juce::dsp::AudioBlock<float> distBlock (channels, 2, (size_t) numSamples);
-        auto osBlock = oversampling.processSamplesUp (distBlock);
-
-        auto* osL = osBlock.getChannelPointer (0);
-        auto* osR = osBlock.getChannelPointer (1);
-        const int osN = (int) osBlock.getNumSamples();
-
-        for (int i = 0; i < osN; ++i)
+        // ─── NAM Neural Inference ──────────────────────────────────────
+        // NAM is mono with internal state — we mix L+R to mono, process once,
+        // then write the result back to both channels.
+        // NAM expects double** (NAM_SAMPLE = double by default).
         {
-            float xL = osL[i];
-            float xR = osR[i];
-
-            // ── Stage 1: sag input scaling → HP → LP → tick (atan + phase invert)
-            float x1L = stage1Cfg.tick (s1LPL.process (s1HPL.process (xL * sagL.getInputScale())));
-            float x1R = stage1Cfg.tick (s1LPR.process (s1HPR.process (xR * sagR.getInputScale())));
-
-            // ── Stage 2: HP → LP → tick
-            float x2L = stage2Cfg.tick (s2LPL.process (s2HPL.process (x1L)));
-            float x2R = stage2Cfg.tick (s2LPR.process (s2HPR.process (x1R)));
-
-            // ── Stage 3: HP → LP → tick (only if drive > 33%)
-            float x3L = x2L, x3R = x2R;
-            if (stage3Active)
+            const juce::SpinLock::ScopedTryLockType lock (namModelLock);
+            if (lock.isLocked() && namModel)
             {
-                x3L = stage3Cfg.tick (s3LPL.process (s3HPL.process (x2L)));
-                x3R = stage3Cfg.tick (s3LPR.process (s3HPR.process (x2R)));
-            }
+                // Ensure buffers are large enough
+                if ((int) namInputBuffer.size() < numSamples)
+                {
+                    namInputBuffer.resize ((size_t) numSamples);
+                    namOutputBuffer.resize ((size_t) numSamples);
+                }
 
-            // ── Sag feedback: returns value UNCHANGED, updates internal state
-            osL[i] = sagL.tickOutput (x3L);
-            osR[i] = sagR.tickOutput (x3R);
+                // ── Mix L+R to mono (equal power sum) ───────────────────
+                for (int i = 0; i < numSamples; ++i)
+                    namInputBuffer[(size_t)i] = (double) (L[i] + R[i]) * 0.5;
+
+                double* inPtr  = namInputBuffer.data();
+                double* outPtr = namOutputBuffer.data();
+                double* inPtrs[1]  = { inPtr };
+                double* outPtrs[1] = { outPtr };
+                namModel->process (inPtrs, outPtrs, numSamples);
+
+                // ── Write mono result back to both channels ─────────────
+                for (int i = 0; i < numSamples; ++i)
+                {
+                    float out = (float) namOutputBuffer[(size_t)i];
+                    L[i] = out;
+                    R[i] = out;
+                }
+            }
         }
 
-        oversampling.processSamplesDown (distBlock);
-
-        // ─── Post-distortion 3-band tone stack ──────────────────────────
+        // ─── Post-NAM 3-band tone stack ─────────────────────────────────
         for (int i = 0; i < numSamples; ++i)
         {
             L[i] = bassEqL.process (L[i]);

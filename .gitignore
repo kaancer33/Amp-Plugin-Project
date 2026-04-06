@@ -43,3 +43,7 @@ desktop.ini
 # CLion
 .idea/
 cmake-build-*/
+
+# Dependencies (downloaded separately — too large for git)
+Dependencies/eigen/
+Dependencies/nlohmann/

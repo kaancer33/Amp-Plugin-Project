@@ -4,8 +4,6 @@ project(NewProject VERSION 0.1.0)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # ── Auto-incrementing build number ────────────────────────────────────────────
-# Increments every time CMake configures (i.e. every build from VS Code,
-# or any time CMakeLists.txt is saved).
 set(_BUILD_NUM_FILE "${CMAKE_CURRENT_SOURCE_DIR}/build_number.txt")
 if(EXISTS "${_BUILD_NUM_FILE}")
     file(READ "${_BUILD_NUM_FILE}" _BUILD_NUM)
@@ -34,16 +32,48 @@ juce_add_plugin(NewProject
     PRODUCT_NAME               "NewProject b${_BUILD_NUM}"
 )
 
-# Generate JuceHeader.h for CMake builds (replaces Projucer's JuceLibraryCode version)
+# Generate JuceHeader.h for CMake builds
 juce_generate_juce_header(NewProject)
+
+# ── NAM Core source files ────────────────────────────────────────────────────
+set(NAM_SOURCES
+    Source/NAM/activations.cpp
+    Source/NAM/container.cpp
+    Source/NAM/conv1d.cpp
+    Source/NAM/convnet.cpp
+    Source/NAM/dsp.cpp
+    Source/NAM/get_dsp.cpp
+    Source/NAM/lstm.cpp
+    Source/NAM/ring_buffer.cpp
+    Source/NAM/slimmable_wavenet.cpp
+    Source/NAM/util.cpp
+    Source/NAM/wavenet.cpp
+)
 
 target_sources(NewProject PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
     Source/PresetManager.cpp
+    ${NAM_SOURCES}
 )
 
+# C++17 for JUCE, NAM Core uses some C++17/20 features but builds fine with 17
 target_compile_features(NewProject PRIVATE cxx_std_17)
+
+# ── Include paths ────────────────────────────────────────────────────────────
+# NAM headers are in Source/NAM/, they include "json.hpp" and <Eigen/Dense>
+target_include_directories(NewProject PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source
+    ${CMAKE_CURRENT_SOURCE_DIR}/Dependencies/eigen
+    ${CMAKE_CURRENT_SOURCE_DIR}/Dependencies/nlohmann
+)
+
+# NAM headers include "json.hpp" — make nlohmann dir available to NAM sources
+# Also NAM includes <Eigen/Dense> — Eigen dir needs to be on include path
+# The NAM .cpp files include headers like "activations.h" relative to NAM/
+target_include_directories(NewProject PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/NAM
+)
 
 target_compile_definitions(NewProject
     PUBLIC

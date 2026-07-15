@@ -8,6 +8,10 @@
 #include "json.hpp"
 #include "get_dsp.h"
 #include "model_config.h"
+#include "container.h"
+#include "convnet.h"
+#include "lstm.h"
+#include "wavenet.h"
 
 namespace nam
 {
@@ -88,6 +92,28 @@ std::vector<float> GetWeights(nlohmann::json const& j)
     throw std::runtime_error("Corrupted model file is missing weights.");
 }
 
+namespace
+{
+// The static ConfigParserHelper registrars in each architecture's .cpp are
+// discarded when NAM is linked as a static library (nothing references those
+// object files, so the linker never pulls them in and the registry stays
+// empty). Register the built-in architectures explicitly so loading works
+// regardless of how NAM is linked.
+void ensure_builtin_parsers_registered()
+{
+  auto& registry = ConfigParserRegistry::instance();
+  auto add = [&registry](const char* name, ConfigParserFunction func) {
+    if (!registry.has(name))
+      registry.registerParser(name, std::move(func));
+  };
+  add("WaveNet", nam::wavenet::create_config);
+  add("LSTM", nam::lstm::create_config);
+  add("ConvNet", nam::convnet::create_config);
+  add("Linear", nam::linear::create_config);
+  add("SlimmableContainer", nam::container::create_config);
+}
+} // anonymous namespace
+
 std::unique_ptr<DSP> get_dsp(const std::filesystem::path config_filename)
 {
   dspData temp;
@@ -147,6 +173,7 @@ std::unique_ptr<DSP> get_dsp(const nlohmann::json& config, dspData& returnedConf
 std::unique_ptr<ModelConfig> parse_model_config_json(const std::string& architecture, const nlohmann::json& config,
                                                      double sample_rate)
 {
+  ensure_builtin_parsers_registered();
   return ConfigParserRegistry::instance().parse(architecture, config, sample_rate);
 }
 
@@ -201,6 +228,7 @@ std::unique_ptr<DSP> get_dsp(dspData& conf)
     metadata.output_level = extract("output_level_dbu");
   }
 
+  ensure_builtin_parsers_registered();
   auto model_config = ConfigParserRegistry::instance().parse(conf.architecture, conf.config, conf.expected_sample_rate);
   return create_dsp(std::move(model_config), std::move(conf.weights), metadata);
 }

@@ -15,8 +15,25 @@ math(EXPR _BUILD_NUM "${_BUILD_NUM} + 1")
 file(WRITE "${_BUILD_NUM_FILE}" "${_BUILD_NUM}")
 message(STATUS "Build number: ${_BUILD_NUM}")
 
-# Path to JUCE (two levels up from this file, then into JUCE folder)
-add_subdirectory("../../JUCE" JUCE)
+# Path to JUCE. Override with -DJUCE_PATH=<dir>; otherwise common locations are searched.
+set(JUCE_PATH "" CACHE PATH "Path to the JUCE source tree")
+if(NOT JUCE_PATH)
+    foreach(_candidate
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../JUCE"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../JUCE"
+        "${CMAKE_CURRENT_SOURCE_DIR}/JUCE"
+    )
+        if(EXISTS "${_candidate}/CMakeLists.txt")
+            set(JUCE_PATH "${_candidate}")
+            break()
+        endif()
+    endforeach()
+endif()
+if(NOT JUCE_PATH OR NOT EXISTS "${JUCE_PATH}/CMakeLists.txt")
+    message(FATAL_ERROR "JUCE not found. Pass -DJUCE_PATH=<path to JUCE source tree>.")
+endif()
+message(STATUS "Using JUCE from: ${JUCE_PATH}")
+add_subdirectory("${JUCE_PATH}" JUCE)
 
 juce_add_plugin(NewProject
     COMPANY_NAME               "YourCompany"
@@ -28,7 +45,7 @@ juce_add_plugin(NewProject
     COPY_PLUGIN_AFTER_BUILD    FALSE
     PLUGIN_MANUFACTURER_CODE   Manu
     PLUGIN_CODE                NewP
-    FORMATS                    VST3
+    FORMATS                    VST3 Standalone
     PRODUCT_NAME               "NewProject b${_BUILD_NUM}"
 )
 

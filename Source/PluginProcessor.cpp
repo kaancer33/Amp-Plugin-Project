@@ -103,11 +103,11 @@ void NewProjectAudioProcessor::loadNAMModel (const juce::File& namFile)
 juce::File NewProjectAudioProcessor::getModelsDirectory() const
 {
     // Use a persistent "Models" folder in the user's app data
-    // Windows: C:\Users\<user>\AppData\Roaming\NewProject\Models
-    // macOS:   ~/Library/Application Support/NewProject/Models
+    // Windows: C:\Users\<user>\AppData\Roaming\FruGuitar Audio\Models
+    // macOS:   ~/Library/Application Support/FruGuitar Audio/Models
     auto appData = juce::File::getSpecialLocation (
         juce::File::userApplicationDataDirectory)
-        .getChildFile ("NewProject").getChildFile ("Models");
+        .getChildFile ("FruGuitar Audio").getChildFile ("Models");
 
     if (!appData.isDirectory())
         appData.createDirectory();
@@ -115,6 +115,11 @@ juce::File NewProjectAudioProcessor::getModelsDirectory() const
     // On first run, find bundled Models/ folder and copy .nam files to app data.
     // We search aggressively — exe location, plugin location, and known paths.
     juce::Array<juce::File> searchDirs;
+
+    // Legacy library from before the FruGuitar Audio rename — checked first so
+    // an existing collection migrates automatically.
+    searchDirs.add (juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+                        .getChildFile ("NewProject").getChildFile ("Models"));
 
     // From the executable / plugin binary
     auto exeDir = juce::File::getSpecialLocation (

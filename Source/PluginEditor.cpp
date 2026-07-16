@@ -423,9 +423,9 @@ void NewProjectAudioProcessorEditor::paint (juce::Graphics& g)
     // Title text with pixel drop shadow
     g.setFont (PixelLookAndFeel::pixelFont ((float) topBarH * 0.48f, true));
     g.setColour (PixelLookAndFeel::navy.withAlpha (0.65f));
-    g.drawFittedText ("NEWPROJECT", 9, 1, W / 2, topBarH, juce::Justification::centredLeft, 1);
+    g.drawFittedText ("FRUGUITAR AUDIO", 9, 1, W / 2, topBarH, juce::Justification::centredLeft, 1);
     g.setColour (juce::Colours::white);
-    g.drawFittedText ("NEWPROJECT", 8, 0, W / 2, topBarH, juce::Justification::centredLeft, 1);
+    g.drawFittedText ("FRUGUITAR AUDIO", 8, 0, W / 2, topBarH, juce::Justification::centredLeft, 1);
 }
 
 void NewProjectAudioProcessorEditor::resized()

@@ -174,9 +174,24 @@ void PresetManager::scanDirectory (const juce::File& dir)
 // ── Private helpers ──────────────────────────────────────────────────────────
 juce::File PresetManager::defaultFolder() const
 {
-    return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
-               .getChildFile ("NewProject")
-               .getChildFile ("Presets");
+    auto folder = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
+                      .getChildFile ("FruGuitar Audio")
+                      .getChildFile ("Presets");
+
+    if (! folder.isDirectory())
+    {
+        folder.createDirectory();
+
+        // Migrate user presets from the pre-rename folder ("NewProject")
+        auto legacy = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
+                          .getChildFile ("NewProject")
+                          .getChildFile ("Presets");
+        if (legacy.isDirectory())
+            for (auto& f : legacy.findChildFiles (juce::File::findFiles, false, "*"))
+                f.copyFileTo (folder.getChildFile (f.getFileName()));
+    }
+
+    return folder;
 }
 
 void PresetManager::applyFactory (int factoryIndex)

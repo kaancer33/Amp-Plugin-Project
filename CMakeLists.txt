@@ -1,19 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
-project(NewProject VERSION 0.1.0)
+project(NewProject VERSION 0.9.0)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-
-# ── Auto-incrementing build number ────────────────────────────────────────────
-set(_BUILD_NUM_FILE "${CMAKE_CURRENT_SOURCE_DIR}/build_number.txt")
-if(EXISTS "${_BUILD_NUM_FILE}")
-    file(READ "${_BUILD_NUM_FILE}" _BUILD_NUM)
-    string(STRIP "${_BUILD_NUM}" _BUILD_NUM)
-else()
-    set(_BUILD_NUM 0)
-endif()
-math(EXPR _BUILD_NUM "${_BUILD_NUM} + 1")
-file(WRITE "${_BUILD_NUM_FILE}" "${_BUILD_NUM}")
-message(STATUS "Build number: ${_BUILD_NUM}")
 
 # Path to JUCE. Override with -DJUCE_PATH=<dir>; otherwise common locations are searched.
 set(JUCE_PATH "" CACHE PATH "Path to the JUCE source tree")
@@ -36,17 +24,17 @@ message(STATUS "Using JUCE from: ${JUCE_PATH}")
 add_subdirectory("${JUCE_PATH}" JUCE)
 
 juce_add_plugin(NewProject
-    COMPANY_NAME               "YourCompany"
+    COMPANY_NAME               "FruGuitar Audio"
     IS_SYNTH                   FALSE
     NEEDS_MIDI_INPUT           FALSE
     NEEDS_MIDI_OUTPUT          FALSE
     IS_MIDI_EFFECT             FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS FALSE
     COPY_PLUGIN_AFTER_BUILD    FALSE
-    PLUGIN_MANUFACTURER_CODE   Manu
-    PLUGIN_CODE                NewP
+    PLUGIN_MANUFACTURER_CODE   Frgt
+    PLUGIN_CODE                Frga
     FORMATS                    VST3 Standalone
-    PRODUCT_NAME               "NewProject b${_BUILD_NUM}"
+    PRODUCT_NAME               "FruGuitar Audio"
 )
 
 # Generate JuceHeader.h for CMake builds

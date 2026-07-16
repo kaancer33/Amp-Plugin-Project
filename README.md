@@ -1,11 +1,13 @@
-# Amp-Plugin-Project
+# FruGuitar Audio
 
 **A neural guitar amp sim with an early-2000s pixel-art soul.**
 
-Amp-Plugin-Project is a JUCE-based guitar amplifier plugin (VST3 + Standalone) built around
+FruGuitar Audio is a JUCE-based guitar amplifier plugin (VST3 + Standalone) built around
 [Neural Amp Modeler (NAM)](https://www.neuralampmodeler.com/) — load any `.nam` capture and play it
 through a full pedalboard-style chain, wrapped in a custom **"Pixel Aero"** interface: Frutiger Aero
 gloss rendered entirely in chunky pixel art.
+
+> 📦 **[Download the latest beta release](https://github.com/kaancer33/Amp-Plugin-Project/releases)** — Windows VST3 + Standalone.
 
 ![Pixel Aero UI](docs/screenshot.png)
 
@@ -65,12 +67,23 @@ on Windows) and rescan in your DAW.
 
 On first run the plugin creates a model library folder and seeds it with the bundled models:
 
-- **Windows:** `%APPDATA%\NewProject\Models`
-- **macOS:** `~/Library/Application Support/NewProject/Models`
+- **Windows:** `%APPDATA%\FruGuitar Audio\Models`
+- **macOS:** `~/Library/Application Support/FruGuitar Audio/Models`
 
-Any `.nam` file you import lands there and appears in the model dropdown.
+Any `.nam` file you import lands there and appears in the model dropdown. User presets live in
+`Documents/FruGuitar Audio/Presets`. Libraries from older builds (`NewProject`) migrate
+automatically on first launch.
 
 ## Changelog
+
+### v0.9.0-beta — 2026-07-16 — First beta release as FruGuitar Audio
+- Plugin renamed to **FruGuitar Audio** (company "FruGuitar Audio", stable plugin ID `Frga`).
+  DAWs will see this as a new plugin — sessions using the old `NewProject` builds need the
+  plugin re-inserted.
+- Product name no longer embeds a build counter, so future updates replace the plugin
+  in place instead of appearing as a new one.
+- Model and preset libraries moved to `FruGuitar Audio` folders with automatic migration
+  from the old `NewProject` locations.
 
 ### 2026-07-16 — Pixel Aero UI
 - Complete visual redesign: dithered sky background with pixel clouds, bubbles, and sparkles;

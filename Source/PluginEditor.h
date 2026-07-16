@@ -63,6 +63,7 @@ private:
     NewProjectAudioProcessor& audioProcessor;
     PixelLookAndFeel laf;
     PresetManager    presetMgr;
+    juce::TooltipWindow tooltipWindow { this };
 
     // ── Effect panels ──────────────────────────────────────────────────────
     EffectPanel distortionPanel, delayPanel, reverbPanel;

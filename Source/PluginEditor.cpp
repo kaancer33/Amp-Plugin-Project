@@ -36,21 +36,27 @@ EffectPanel::EffectPanel (const juce::String& title,
 
 void EffectPanel::paint (juce::Graphics& g)
 {
-    auto b = getLocalBounds().toFloat().reduced (1.0f);
-
-    g.setColour (juce::Colours::black);
-    g.fillRect (b);
-
-    g.setColour (juce::Colours::white);
-    g.drawRect (b, 1.5f);
-
+    auto b = getLocalBounds().reduced (2);
+    const int px = 2;
     const int headerH = juce::roundToInt (getHeight() * 0.16f);
-    g.drawHorizontalLine (headerH, b.getX(), b.getRight());
 
-    g.setFont (PixelLookAndFeel::pixelFont ((float) headerH * 0.42f));
-    g.drawFittedText (panelTitle,
-                       6, 0, getWidth() - bypassBtn.getWidth() - 10, headerH,
-                       juce::Justification::centredLeft, 1);
+    // Frosted glass card with a deep-blue pixel border
+    PixelLookAndFeel::fillSteppedRect (g, b, px, PixelLookAndFeel::deepBlue.withAlpha (0.60f));
+    PixelLookAndFeel::fillSteppedRect (g, b.reduced (2), px, juce::Colours::white.withAlpha (0.38f));
+
+    // Glossy aqua header strip
+    auto header = b.reduced (2).removeFromTop (headerH);
+    PixelLookAndFeel::fillGlossSteppedRect (g, header, px, PixelLookAndFeel::glossBlue, true, false);
+    g.setColour (PixelLookAndFeel::deepBlue);
+    g.fillRect (header.getX(), header.getBottom() - 1, header.getWidth(), 1);
+
+    g.setFont (PixelLookAndFeel::pixelFont ((float) headerH * 0.42f, true));
+    auto titleArea = juce::Rectangle<int> (10, header.getY(),
+                                           getWidth() - bypassBtn.getWidth() - 20, header.getHeight());
+    g.setColour (PixelLookAndFeel::navy.withAlpha (0.55f));
+    g.drawFittedText (panelTitle, titleArea.translated (1, 1), juce::Justification::centredLeft, 1);
+    g.setColour (juce::Colours::white);
+    g.drawFittedText (panelTitle, titleArea, juce::Justification::centredLeft, 1);
 }
 
 void EffectPanel::resized()
@@ -58,24 +64,35 @@ void EffectPanel::resized()
     const int headerH = juce::roundToInt (getHeight() * 0.16f);
     const int bypassW = juce::roundToInt (getWidth()  * 0.28f);
 
-    bypassBtn.setBounds (getWidth() - bypassW - 4, 2, bypassW, headerH - 4);
+    bypassBtn.setBounds (getWidth() - bypassW - 6, 5, bypassW, headerH - 6);
 
     const int numKnobs  = (int) knobs.size();
     if (numKnobs == 0) return;
 
-    const int knobAreaY = headerH + 4;
-    const int knobAreaH = getHeight() - knobAreaY - 4;
-    const int labelH    = juce::roundToInt (knobAreaH * 0.18f);
-    const int slotW     = getWidth() / numKnobs;
-    const int knobSize  = juce::jmin (slotW - 10, knobAreaH - labelH - 10);
+    // Two-row grid for 4+ knobs so the orbs get room to breathe
+    const int rows = numKnobs > 3 ? 2 : 1;
+    const int cols = (numKnobs + rows - 1) / rows;
+
+    const int areaY  = headerH + 6;
+    const int areaH  = getHeight() - areaY - 6;
+    const int rowH   = areaH / rows;
+    const int slotW  = (getWidth() - 8) / cols;
+    const int labelH = juce::roundToInt (rowH * 0.16f);
+    const int knobSize = juce::jmin (slotW - 8, rowH - labelH - 8);
 
     for (int i = 0; i < numKnobs; ++i)
     {
-        const int slotX = i * slotW;
-        const int knobX = slotX + (slotW - knobSize) / 2;
-        const int knobY = knobAreaY + (knobAreaH - labelH - knobSize) / 2;
-        knobs[i]->setBounds (knobX, knobY, knobSize, knobSize);
-        knobLabels[i]->setBounds (slotX, knobY + knobSize + 2, slotW, labelH);
+        const int row         = i / cols;
+        const int col         = i - row * cols;
+        const int colsThisRow = (row == rows - 1) ? numKnobs - cols * (rows - 1) : cols;
+        const int rowX0       = 4 + (getWidth() - 8 - colsThisRow * slotW) / 2;
+
+        const int x0 = rowX0 + col * slotW;
+        const int y0 = areaY + row * rowH;
+        const int kx = x0 + (slotW - knobSize) / 2;
+        const int ky = y0 + (rowH - labelH - knobSize) / 2;
+        knobs[i]->setBounds (kx, ky, knobSize, knobSize);
+        knobLabels[i]->setBounds (x0, ky + knobSize, slotW, labelH);
     }
 }
 
@@ -193,29 +210,34 @@ void NewProjectAudioProcessorEditor::timerCallback()
     if (loaded && processing)
     {
         namStatusLabel.setText ("NAM", juce::dontSendNotification);
-        namStatusLabel.setColour (juce::Label::textColourId, juce::Colours::lime);
+        namStatusLabel.setColour (juce::Label::textColourId, PixelLookAndFeel::statusGreen);
     }
     else if (loaded && !processing)
     {
         namStatusLabel.setText ("NAM?", juce::dontSendNotification);
-        namStatusLabel.setColour (juce::Label::textColourId, juce::Colours::yellow);
+        namStatusLabel.setColour (juce::Label::textColourId, PixelLookAndFeel::statusAmber);
     }
     else
     {
         namStatusLabel.setText ("FALLBACK", juce::dontSendNotification);
-        namStatusLabel.setColour (juce::Label::textColourId, juce::Colours::red);
+        namStatusLabel.setColour (juce::Label::textColourId, PixelLookAndFeel::statusRed);
     }
 
     // Update model bar label with error info if applicable
     if (!loaded && audioProcessor.lastLoadError.isNotEmpty())
     {
         modelBarLabel.setText ("ERR:", juce::dontSendNotification);
-        modelBarLabel.setColour (juce::Label::textColourId, juce::Colours::red);
+        modelBarLabel.setColour (juce::Label::textColourId, PixelLookAndFeel::statusRed);
+        // Hover either label to see the actual load error
+        modelBarLabel.setTooltip (audioProcessor.lastLoadError);
+        namStatusLabel.setTooltip (audioProcessor.lastLoadError);
     }
     else
     {
         modelBarLabel.setText (loaded ? "MODEL:" : "NO MODEL!", juce::dontSendNotification);
-        modelBarLabel.setColour (juce::Label::textColourId, juce::Colours::white);
+        modelBarLabel.setColour (juce::Label::textColourId, PixelLookAndFeel::navy);
+        modelBarLabel.setTooltip ({});
+        namStatusLabel.setTooltip ({});
     }
 }
 
@@ -354,27 +376,56 @@ void NewProjectAudioProcessorEditor::onDelete()
 //==============================================================================
 void NewProjectAudioProcessorEditor::paint (juce::Graphics& g)
 {
-    g.fillAll (juce::Colours::black);
+    const int W = getWidth(), H = getHeight();
+    const int px = juce::jmax (2, H / 220);
 
-    const int topBarH    = getHeight() / 13;
+    // ── Dithered sky ─────────────────────────────────────────────────────
+    PixelLookAndFeel::fillDitheredV (g, getLocalBounds(),
+                                     PixelLookAndFeel::skyTop, PixelLookAndFeel::skyBottom,
+                                     8, px);
+
+    // Pixel clouds drifting behind the frosted panels
+    PixelLookAndFeel::drawPixelCloud (g, (int) (W * 0.06f), (int) (H * 0.30f), px * 2, 0.55f);
+    PixelLookAndFeel::drawPixelCloud (g, (int) (W * 0.52f), (int) (H * 0.24f), px * 3, 0.45f);
+    PixelLookAndFeel::drawPixelCloud (g, (int) (W * 0.78f), (int) (H * 0.52f), px * 2, 0.40f);
+    PixelLookAndFeel::drawPixelCloud (g, (int) (W * 0.24f), (int) (H * 0.68f), px * 3, 0.35f);
+
+    // Rising bubbles
+    PixelLookAndFeel::fillPixelCircleFlat (g, W * 0.90f, H * 0.72f, px * 5.0f,
+                                           juce::Colours::white.withAlpha (0.20f), px);
+    PixelLookAndFeel::fillPixelCircleFlat (g, W * 0.94f, H * 0.58f, px * 3.0f,
+                                           juce::Colours::white.withAlpha (0.25f), px);
+    PixelLookAndFeel::fillPixelCircleFlat (g, W * 0.87f, H * 0.44f, px * 2.0f,
+                                           juce::Colours::white.withAlpha (0.30f), px);
+
+    const int topBarH    = H / 13;
     const int modelBarH  = topBarH;
     const int presetBarH = topBarH;
 
+    // ── Glossy deep-blue title bar ───────────────────────────────────────
+    auto titleBar = juce::Rectangle<int> (0, 0, W, topBarH);
+    PixelLookAndFeel::fillGlossSteppedRect (g, titleBar, px, PixelLookAndFeel::deepBlue,
+                                            false, false);
+    g.setColour (PixelLookAndFeel::navy);
+    g.fillRect (0, topBarH - 1, W, 1);
+
+    // ── Frosted strips behind the model & preset bars ────────────────────
+    g.setColour (juce::Colours::white.withAlpha (0.30f));
+    g.fillRect (0, topBarH, W, modelBarH + presetBarH);
+    g.setColour (PixelLookAndFeel::deepBlue.withAlpha (0.35f));
+    g.fillRect (0, topBarH + modelBarH - 1, W, 1);
+    g.fillRect (0, topBarH + modelBarH + presetBarH - 1, W, 1);
+
+    // Sparkles on the title bar
+    PixelLookAndFeel::drawSparkle (g, (int) (W * 0.62f), topBarH / 2, juce::jmax (1, px / 2), 0.8f);
+    PixelLookAndFeel::drawSparkle (g, (int) (W * 0.66f), topBarH / 3, juce::jmax (1, px / 3), 0.5f);
+
+    // Title text with pixel drop shadow
+    g.setFont (PixelLookAndFeel::pixelFont ((float) topBarH * 0.48f, true));
+    g.setColour (PixelLookAndFeel::navy.withAlpha (0.65f));
+    g.drawFittedText ("NEWPROJECT", 9, 1, W / 2, topBarH, juce::Justification::centredLeft, 1);
     g.setColour (juce::Colours::white);
-    g.drawHorizontalLine (topBarH,                         0.0f, (float) getWidth());
-    g.drawHorizontalLine (topBarH + modelBarH,             0.0f, (float) getWidth());
-    g.drawHorizontalLine (topBarH + modelBarH + presetBarH, 0.0f, (float) getWidth());
-
-    // Panel dividers (vertical lines between the three panels)
-    const int panelY = topBarH + modelBarH + presetBarH;
-    const int panelW = getWidth() / 3;
-    g.drawVerticalLine (panelW,     (float) panelY, (float) getHeight());
-    g.drawVerticalLine (panelW * 2, (float) panelY, (float) getHeight());
-
-    // Title
-    g.setFont (PixelLookAndFeel::pixelFont ((float) topBarH * 0.48f));
-    g.drawFittedText ("NEWPROJECT", 8, 0, getWidth() / 2, topBarH,
-                       juce::Justification::centredLeft, 1);
+    g.drawFittedText ("NEWPROJECT", 8, 0, W / 2, topBarH, juce::Justification::centredLeft, 1);
 }
 
 void NewProjectAudioProcessorEditor::resized()

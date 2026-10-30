@@ -12,6 +12,12 @@ project, drawn crisp at any window size.
 |---|---|---|
 | ![Gate and boost](docs/screenshot-pre.png) | ![Cabinet](docs/screenshot-cab.png) | ![Delay and reverb](docs/screenshot-fx.png) |
 
+## Download
+
+Windows builds are on the [Releases page](https://github.com/kaancer33/Amp-Plugin-Project/releases).
+Unzip, then copy `Forge Amp.vst3` to `C:\Program Files\Common Files\VST3` and rescan plugins in
+your DAW, or run `Forge Amp.exe` on its own.
+
 ---
 
 ## The interface
@@ -237,9 +243,9 @@ Tests/AmpTests.cpp      offline test / render harness
 ## Compatibility with the earlier version
 
 This is a rewrite of the earlier "NewProject" plugin, starting from its 6 April 2026 version. That
-is before the Neural Amp Modeler engine and the FruGuitar Audio rename on `main`, so Forge Amp does
-not load `.nam` models. Locally, the original sources and an intermediate dark-amber version of
-this UI are kept in `_original_backup/`, which git ignores; delete it once you no longer need it.
+is before the Neural Amp Modeler engine and the FruGuitar Audio rename, so Forge Amp does not load
+`.nam` models. FruGuitar Audio is still in the history: the `fruguitar` branch and the
+[v0.9.0-beta release](https://github.com/kaancer33/Amp-Plugin-Project/releases/tag/v0.9.0-beta).
 Compared with "NewProject":
 
 - **New plugin identity.** The old build used JUCE's default codes (`Manu`/`NewP`), which clash

@@ -1,203 +1,252 @@
 #include "PresetManager.h"
-#include "PluginProcessor.h"
+#include "FactoryPresets.h"
+#include "Parameters.h"
 
-const juce::String PresetManager::kExtension = ".npp";
-
-// ── Factory preset definitions ───────────────────────────────────────────────
-// Drive is 0-1 (mapped to -20..+50 dB internally).
-// Bass/Mid/Treble are 0-1 (0.5 = flat, 0 = -12dB, 1 = +12dB).
-// Gate is dB threshold (-80 = off, -55 = normal, -30 = aggressive).
-const PresetManager::FactoryData PresetManager::kFactory[PresetManager::kNumFactory] =
+namespace forge
 {
-    // ── Clean: sparkly clean, flat EQ, gate off ─────────────────────────
-    { "Clean", {
-        {"distDrive", 0.0f}, {"distBass", 0.5f}, {"distMid", 0.5f},
-        {"distTreble", 0.5f}, {"distGate", -80.0f}, {"level", 0.85f},
-        {"delayTime", 20.0f}, {"delayFeedback", 0.0f}, {"delayTone", 6000.0f}, {"delayMix", 0.0f},
-        {"reverbRoom", 0.25f}, {"reverbPreDelay", 15.0f}, {"reverbDamp", 0.6f}, {"reverbMix", 0.12f},
-        {"distortionOn", 0.0f}, {"delayOn", 0.0f}, {"reverbOn", 1.0f}
-    }},
-    // ── Crunch: edge-of-breakup, slight mid push ────────────────────────
-    { "Crunch", {
-        {"distDrive", 0.25f}, {"distBass", 0.45f}, {"distMid", 0.58f},
-        {"distTreble", 0.55f}, {"distGate", -65.0f}, {"level", 0.70f},
-        {"delayTime", 120.0f}, {"delayFeedback", 0.25f}, {"delayTone", 5000.0f}, {"delayMix", 0.18f},
-        {"reverbRoom", 0.4f}, {"reverbPreDelay", 25.0f}, {"reverbDamp", 0.5f}, {"reverbMix", 0.22f},
-        {"distortionOn", 1.0f}, {"delayOn", 1.0f}, {"reverbOn", 1.0f}
-    }},
-    // ── Blues Lead: warm singing sustain ─────────────────────────────────
-    { "Blues Lead", {
-        {"distDrive", 0.40f}, {"distBass", 0.48f}, {"distMid", 0.62f},
-        {"distTreble", 0.45f}, {"distGate", -60.0f}, {"level", 0.55f},
-        {"delayTime", 380.0f}, {"delayFeedback", 0.40f}, {"delayTone", 4000.0f}, {"delayMix", 0.28f},
-        {"reverbRoom", 0.5f}, {"reverbPreDelay", 30.0f}, {"reverbDamp", 0.45f}, {"reverbMix", 0.28f},
-        {"distortionOn", 1.0f}, {"delayOn", 1.0f}, {"reverbOn", 1.0f}
-    }},
-    // ── Heavy: tight high-gain metal rhythm ─────────────────────────────
-    { "Heavy", {
-        {"distDrive", 0.65f}, {"distBass", 0.38f}, {"distMid", 0.60f},
-        {"distTreble", 0.52f}, {"distGate", -50.0f}, {"level", 0.45f},
-        {"delayTime", 80.0f}, {"delayFeedback", 0.15f}, {"delayTone", 3500.0f}, {"delayMix", 0.08f},
-        {"reverbRoom", 0.4f}, {"reverbPreDelay", 15.0f}, {"reverbDamp", 0.65f}, {"reverbMix", 0.15f},
-        {"distortionOn", 1.0f}, {"delayOn", 0.0f}, {"reverbOn", 1.0f}
-    }},
-    // ── Death Metal: brutal, tight, maximum aggression ──────────────────
-    { "Death Metal", {
-        {"distDrive", 0.85f}, {"distBass", 0.35f}, {"distMid", 0.65f},
-        {"distTreble", 0.48f}, {"distGate", -45.0f}, {"level", 0.35f},
-        {"delayTime", 60.0f}, {"delayFeedback", 0.10f}, {"delayTone", 3000.0f}, {"delayMix", 0.05f},
-        {"reverbRoom", 0.35f}, {"reverbPreDelay", 10.0f}, {"reverbDamp", 0.75f}, {"reverbMix", 0.10f},
-        {"distortionOn", 1.0f}, {"delayOn", 0.0f}, {"reverbOn", 1.0f}
-    }},
-};
-
-// ── Constructor ──────────────────────────────────────────────────────────────
-PresetManager::PresetManager (NewProjectAudioProcessor& p) : proc (p)
+namespace
 {
-    auto folder = defaultFolder();
-    folder.createDirectory();
-    scanDirectory (folder);
+    /** Input gain calibrates the rig to your guitar and interface, so presets never change it. */
+    bool isGlobalSetting (const juce::String& id) { return id == ids::inputGain; }
 }
 
-// ── List accessors ───────────────────────────────────────────────────────────
-int PresetManager::getNumPresets() const
+PresetManager::PresetManager (juce::AudioProcessorValueTreeState& state,
+                              std::function<void (const juce::XmlElement*)> extraLoader,
+                              std::function<void (juce::XmlElement&)> extraSaver)
+    : apvts (state), loadExtra (std::move (extraLoader)), saveExtra (std::move (extraSaver))
 {
-    return kNumFactory + userPresets.size();
+    for (auto& id : allParameterIds())
+        apvts.addParameterListener (id, this);
+
+    // A new instance holds the parameter defaults, so it is the init patch, not a factory preset
+    refresh();
+    currentIndex = -1;
+    currentName = "Default";
 }
 
-juce::String PresetManager::getPresetName (int index) const
+PresetManager::~PresetManager()
 {
-    if (index < kNumFactory)
-        return kFactory[index].name;
-    const int ui = index - kNumFactory;
-    if (ui < userPresets.size())
-        return userPresets[ui].name;
-    return {};
+    for (auto& id : allParameterIds())
+        apvts.removeParameterListener (id, this);
 }
 
-// ── Navigation ───────────────────────────────────────────────────────────────
-void PresetManager::loadPreset (int index)
+void PresetManager::parameterChanged (const juce::String&, float)
 {
-    if (index < 0 || index >= getNumPresets()) return;
-    currentIndex = index;
-    if (isFactory (index))
-        applyFactory (index);
-    else
-        applyFile (userPresets[index - kNumFactory].file);
+    if (! applying.load())
+        dirty = true;
 }
 
-void PresetManager::nextPreset()
+bool PresetManager::isCurrentFactory() const
 {
-    loadPreset ((currentIndex + 1) % getNumPresets());
+    return juce::isPositiveAndBelow (currentIndex, (int) entries.size()) && entries[(size_t) currentIndex].factory;
 }
 
-void PresetManager::prevPreset()
-{
-    int n = getNumPresets();
-    loadPreset ((currentIndex + n - 1) % n);
-}
-
-// ── Save ─────────────────────────────────────────────────────────────────────
-void PresetManager::saveCurrentPreset (std::function<void()> onDone)
-{
-    auto chooser = std::make_shared<juce::FileChooser> (
-        "Save Preset", defaultFolder(), "*" + kExtension);
-
-    chooser->launchAsync (
-        juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles,
-        [this, chooser, onDone] (const juce::FileChooser& fc)
-        {
-            auto result = fc.getResult();
-            if (result == juce::File{}) return;
-
-            auto file = result.withFileExtension (kExtension);
-            auto state = proc.apvts.copyState();
-            std::unique_ptr<juce::XmlElement> xml (state.createXml());
-            if (xml) xml->writeTo (file);
-
-            scanDirectory (defaultFolder());
-            for (int i = 0; i < userPresets.size(); ++i)
-            {
-                if (userPresets[i].file == file)
-                {
-                    currentIndex = kNumFactory + i;
-                    break;
-                }
-            }
-            if (onDone) onDone();
-        });
-}
-
-// ── Delete ───────────────────────────────────────────────────────────────────
-void PresetManager::deletePreset (int index)
-{
-    if (isFactory (index)) return;
-    int ui = index - kNumFactory;
-    if (ui < 0 || ui >= userPresets.size()) return;
-    userPresets[ui].file.deleteFile();
-    userPresets.remove (ui);
-    if (currentIndex >= getNumPresets())
-        currentIndex = getNumPresets() - 1;
-}
-
-// ── Rename ───────────────────────────────────────────────────────────────────
-void PresetManager::renamePreset (int index, const juce::String& newName)
-{
-    if (isFactory (index)) return;
-    int ui = index - kNumFactory;
-    if (ui < 0 || ui >= userPresets.size()) return;
-    auto newFile = userPresets[ui].file.getSiblingFile (newName + kExtension);
-    if (userPresets[ui].file.moveFileTo (newFile))
-    {
-        userPresets.getReference (ui).name = newName;
-        userPresets.getReference (ui).file = newFile;
-    }
-}
-
-// ── Scan directory ───────────────────────────────────────────────────────────
-void PresetManager::scanDirectory (const juce::File& dir)
-{
-    userPresets.clear();
-    for (auto& f : dir.findChildFiles (juce::File::findFiles, false, "*" + kExtension))
-    {
-        UserPreset p;
-        p.name = f.getFileNameWithoutExtension();
-        p.file = f;
-        userPresets.add (p);
-    }
-    std::sort (userPresets.begin(), userPresets.end(),
-        [] (const UserPreset& a, const UserPreset& b) {
-            return a.name.compareIgnoreCase (b.name) < 0;
-        });
-}
-
-// ── Private helpers ──────────────────────────────────────────────────────────
-juce::File PresetManager::defaultFolder() const
+juce::File PresetManager::getUserFolder() const
 {
     return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
-               .getChildFile ("NewProject")
+               .getChildFile (info::productName)
                .getChildFile ("Presets");
 }
 
-void PresetManager::applyFactory (int factoryIndex)
+juce::String PresetManager::sanitiseName (const juce::String& name)
 {
-    const auto& f = kFactory[factoryIndex];
-    for (auto& pv : f.params)
+    return juce::File::createLegalFileName (name.trim()).substring (0, 64).trim();
+}
+
+void PresetManager::refresh()
+{
+    entries.clear();
+
+    const auto& factory = factoryPresets();
+    for (int i = 0; i < (int) factory.size(); ++i)
+        entries.push_back ({ factory[(size_t) i].name, true, i, {} });
+
+    auto folder = getUserFolder();
+    std::vector<Entry> user;
+    if (folder.isDirectory())
+        for (const auto& f : folder.findChildFiles (juce::File::findFiles, false, juce::String ("*") + extension))
+            user.push_back ({ f.getFileNameWithoutExtension(), false, -1, f });
+
+    std::sort (user.begin(), user.end(), [] (const Entry& a, const Entry& b)
+               { return a.name.compareNatural (b.name) < 0; });
+
+    entries.insert (entries.end(), user.begin(), user.end());
+}
+
+void PresetManager::applyValues (const std::map<juce::String, float>& values)
+{
+    applying = true;
+    for (auto* p : apvts.processor.getParameters())
     {
-        if (pv.id == nullptr) break;  // safety: stop at uninitialized entries
-        if (auto* p = proc.apvts.getParameter (pv.id))
-            p->setValueNotifyingHost (p->convertTo0to1 (pv.value));
+        auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (p);
+        if (ranged == nullptr || isGlobalSetting (ranged->getParameterID()))
+            continue;
+
+        const auto it = values.find (ranged->getParameterID());
+        const float normalised = it != values.end() ? ranged->convertTo0to1 (it->second)
+                                                    : ranged->getDefaultValue();
+        ranged->beginChangeGesture();
+        ranged->setValueNotifyingHost (normalised);
+        ranged->endChangeGesture();
     }
+    applying = false;
+    dirty = false;
 }
 
-void PresetManager::applyFile (const juce::File& file)
+void PresetManager::load (int index)
 {
-    if (auto xml = juce::XmlDocument::parse (file))
-        if (xml->hasTagName (proc.apvts.state.getType()))
-            proc.apvts.replaceState (juce::ValueTree::fromXml (*xml));
+    if (! juce::isPositiveAndBelow (index, (int) entries.size()))
+        return;
+
+    const auto& e = entries[(size_t) index];
+
+    if (e.factory)
+    {
+        std::map<juce::String, float> values;
+        for (auto& [id, v] : factoryPresets()[(size_t) e.factoryIndex].values)
+            values[id] = (float) v;
+        applyValues (values);
+        if (loadExtra) loadExtra (nullptr);
+    }
+    else
+    {
+        auto xml = juce::XmlDocument::parse (e.file);
+        if (xml == nullptr || ! xml->hasTagName ("ForgePreset"))
+            return;
+
+        std::map<juce::String, float> values;
+        for (auto* p : xml->getChildWithTagNameIterator ("PARAM"))
+            values[p->getStringAttribute ("id")] = (float) p->getDoubleAttribute ("value");
+
+        applyValues (values);
+        if (loadExtra) loadExtra (xml->getChildByName ("Extra"));
+    }
+
+    currentIndex = index;
+    currentName = e.name;
+    dirty = false;
 }
 
-juce::File PresetManager::userPresetFile (int index) const
+void PresetManager::loadNext()
 {
-    return userPresets[index - kNumFactory].file;
+    if (! entries.empty())
+        load ((currentIndex + 1) % (int) entries.size());
 }
+
+void PresetManager::loadPrevious()
+{
+    if (! entries.empty())
+        load (currentIndex <= 0 ? (int) entries.size() - 1 : currentIndex - 1);
+}
+
+void PresetManager::resetToDefaults()
+{
+    applyValues ({});
+    if (loadExtra) loadExtra (nullptr);
+    currentIndex = -1;
+    currentName = "Default";
+}
+
+bool PresetManager::userPresetExists (const juce::String& name) const
+{
+    return getUserFolder().getChildFile (sanitiseName (name) + extension).existsAsFile();
+}
+
+bool PresetManager::saveUserPreset (const juce::String& rawName)
+{
+    const auto name = sanitiseName (rawName);
+    if (name.isEmpty())
+        return false;
+
+    auto folder = getUserFolder();
+    if (! folder.createDirectory())
+        return false;
+
+    juce::XmlElement xml ("ForgePreset");
+    xml.setAttribute ("name", name);
+    xml.setAttribute ("version", info::version);
+
+    for (auto* p : apvts.processor.getParameters())
+        if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (p); ranged != nullptr
+                                                                         && ! isGlobalSetting (ranged->getParameterID()))
+        {
+            auto* e = xml.createNewChildElement ("PARAM");
+            e->setAttribute ("id", ranged->getParameterID());
+            e->setAttribute ("value", (double) ranged->convertFrom0to1 (ranged->getValue()));
+        }
+
+    if (saveExtra)
+        saveExtra (*xml.createNewChildElement ("Extra"));
+
+    const auto file = folder.getChildFile (name + extension);
+    if (! xml.writeTo (file))
+        return false;
+
+    refresh();
+    selectByName (name, false);
+    dirty = false;
+    return true;
+}
+
+bool PresetManager::renameCurrent (const juce::String& rawName)
+{
+    const auto name = sanitiseName (rawName);
+    if (name.isEmpty() || isCurrentFactory() || ! juce::isPositiveAndBelow (currentIndex, (int) entries.size()))
+        return false;
+
+    const auto oldFile = entries[(size_t) currentIndex].file;
+    const auto newFile = oldFile.getSiblingFile (name + extension);
+    if (newFile.exists() || ! oldFile.moveFileTo (newFile))
+        return false;
+
+    refresh();
+    selectByName (name, false);
+    return true;
+}
+
+bool PresetManager::deleteCurrent()
+{
+    if (isCurrentFactory() || ! juce::isPositiveAndBelow (currentIndex, (int) entries.size()))
+        return false;
+
+    if (! entries[(size_t) currentIndex].file.moveToTrash())
+        return false;
+
+    refresh();
+    currentIndex = juce::jlimit (0, (int) entries.size() - 1, currentIndex - 1);
+    currentName = entries[(size_t) currentIndex].name;
+    dirty = true;   // the sound on screen no longer matches any saved preset
+    return true;
+}
+
+void PresetManager::selectByName (const juce::String& name, bool factory)
+{
+    for (int i = 0; i < (int) entries.size(); ++i)
+        if (entries[(size_t) i].factory == factory && entries[(size_t) i].name == name)
+        {
+            currentIndex = i;
+            currentName = name;
+            return;
+        }
+}
+
+void PresetManager::writeState (juce::ValueTree& state) const
+{
+    state.setProperty ("presetName", currentName, nullptr);
+    state.setProperty ("presetFactory", isCurrentFactory(), nullptr);
+    state.setProperty ("presetDirty", isDirty(), nullptr);
+}
+
+void PresetManager::readState (const juce::ValueTree& state)
+{
+    refresh();
+    const auto name = state.getProperty ("presetName").toString();
+    if (name.isNotEmpty())
+    {
+        currentIndex = -1;
+        currentName = name;
+        selectByName (name, (bool) state.getProperty ("presetFactory", true));
+    }
+    dirty = (bool) state.getProperty ("presetDirty", false);
+}
+} // namespace forge

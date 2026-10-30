@@ -2,10 +2,11 @@
     "configurations": [
         {
             "name": "Mac",
+            "compileCommands": "${workspaceFolder}/build/compile_commands.json",
             "includePath": [
-                "${workspaceFolder}/**",
                 "${workspaceFolder}/Source",
-                "${workspaceFolder}/build/NewProject_artefacts/JuceLibraryCode",
+                "${workspaceFolder}/build/ForgeAmp_artefacts/JuceLibraryCode",
+                "${workspaceFolder}/build/_deps/juce-src/modules",
                 "${workspaceFolder}/../../JUCE/modules"
             ],
             "defines": [
@@ -13,7 +14,7 @@
                 "JUCE_MAC=1",
                 "JucePlugin_Build_VST=0",
                 "JucePlugin_Build_VST3=1",
-                "JucePlugin_Build_AU=0",
+                "JucePlugin_Build_AU=1",
                 "JucePlugin_Build_AUv3=0",
                 "JucePlugin_Build_Standalone=1"
             ],
@@ -24,10 +25,12 @@
         },
         {
             "name": "Win32",
+            "compileCommands": "${workspaceFolder}/build/compile_commands.json",
             "includePath": [
-                "${workspaceFolder}/**",
-                "${workspaceFolder}/JuceLibraryCode",
-                "${workspaceFolder}/Source"
+                "${workspaceFolder}/Source",
+                "${workspaceFolder}/build/ForgeAmp_artefacts/JuceLibraryCode",
+                "${workspaceFolder}/build/_deps/juce-src/modules",
+                "${workspaceFolder}/../../JUCE/modules"
             ],
             "defines": [
                 "_DEBUG",
@@ -39,11 +42,6 @@
                 "JucePlugin_Build_AUv3=0",
                 "JucePlugin_Build_Standalone=1"
             ],
-            "forcedInclude": [
-                "${workspaceFolder}/JuceLibraryCode/JucePluginDefines.h",
-                "${workspaceFolder}/JuceLibraryCode/JuceHeader.h"
-            ],
-            "compilerPath": "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.40.33807/bin/Hostx64/x64/cl.exe",
             "cStandard": "c17",
             "cppStandard": "c++17",
             "intelliSenseMode": "windows-msvc-x64"

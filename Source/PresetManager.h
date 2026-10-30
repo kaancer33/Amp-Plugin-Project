@@ -1,56 +1,69 @@
 #pragma once
 #include <JuceHeader.h>
 
-class NewProjectAudioProcessor;
+namespace forge
+{
+/** Factory presets (compiled in) followed by user presets (.forgepreset XML files).
 
-// Manages factory presets (built-in) + user presets (XML files on disk).
-// Factory presets are always first in the list and cannot be deleted or renamed.
-class PresetManager
+    Lives in the processor, so the current preset survives closing the editor and is saved
+    with the session. Tracks whether the sound was edited since the preset was loaded. */
+class PresetManager : private juce::AudioProcessorValueTreeState::Listener
 {
 public:
-    static constexpr int kNumFactory = 5;
-    static const juce::String kExtension; // ".npp"
+    static constexpr const char* extension = ".forgepreset";
 
-    explicit PresetManager (NewProjectAudioProcessor& p);
-
-    // ── List ────────────────────────────────────────────────────────────────
-    int         getNumPresets()      const;
-    juce::String getPresetName (int index) const;
-    int         getCurrentIndex()    const { return currentIndex; }
-    bool        isFactory (int index) const { return index < kNumFactory; }
-
-    // ── Navigation ──────────────────────────────────────────────────────────
-    void loadPreset (int index);
-    void nextPreset();
-    void prevPreset();
-
-    // ── User preset operations ───────────────────────────────────────────────
-    // Prompts a FileChooser; saves current APVTS state; refreshes list.
-    void saveCurrentPreset (std::function<void()> onDone);
-    void deletePreset (int index);       // only for user presets
-    void renamePreset (int index, const juce::String& newName); // only user
-
-    // Scan a directory and add found presets.
-    void scanDirectory (const juce::File& dir);
-
-    // ── Factory preset data ──────────────────────────────────────────────────
-    struct ParamVal { const char* id; float value; };
-    struct FactoryData
+    struct Entry
     {
-        const char* name;
-        ParamVal params[17];
+        juce::String name;
+        bool factory = false;
+        int factoryIndex = -1;
+        juce::File file;
     };
-    static const FactoryData kFactory[kNumFactory];
+
+    /** extraLoader is called with a user preset's <Extra> element (e.g. a user IR path). */
+    PresetManager (juce::AudioProcessorValueTreeState& state,
+                   std::function<void (const juce::XmlElement*)> extraLoader,
+                   std::function<void (juce::XmlElement&)> extraSaver);
+    ~PresetManager() override;
+
+    const std::vector<Entry>& getEntries() const noexcept { return entries; }
+    int  getCurrentIndex() const noexcept                 { return currentIndex; }
+    juce::String getCurrentName() const                   { return currentName; }
+    bool isDirty() const noexcept                         { return dirty.load(); }
+    bool isCurrentFactory() const;
+
+    void load (int index);
+    void loadNext();
+    void loadPrevious();
+    void resetToDefaults();
+
+    bool userPresetExists (const juce::String& name) const;
+    bool saveUserPreset (const juce::String& name);
+    bool renameCurrent (const juce::String& newName);
+    bool deleteCurrent();
+
+    void refresh();
+    juce::File getUserFolder() const;
+
+    /** Session persistence of which preset is loaded. */
+    void writeState (juce::ValueTree& state) const;
+    void readState (const juce::ValueTree& state);
+
+    static juce::String sanitiseName (const juce::String& name);
 
 private:
-    NewProjectAudioProcessor& proc;
+    void parameterChanged (const juce::String&, float) override;
+    void applyValues (const std::map<juce::String, float>& values);
+    void selectByName (const juce::String& name, bool factory);
 
-    struct UserPreset { juce::String name; juce::File file; };
-    juce::Array<UserPreset> userPresets;
+    juce::AudioProcessorValueTreeState& apvts;
+    std::function<void (const juce::XmlElement*)> loadExtra;
+    std::function<void (juce::XmlElement&)> saveExtra;
+
+    std::vector<Entry> entries;
     int currentIndex = 0;
-
-    juce::File defaultFolder() const;
-    void applyFactory (int factoryIndex);
-    void applyFile    (const juce::File& f);
-    juce::File userPresetFile (int index) const; // index must be >= kNumFactory
+    juce::String currentName;
+    std::atomic<bool> dirty { false };
+    std::atomic<bool> applying { false };
 };
+} // namespace forge

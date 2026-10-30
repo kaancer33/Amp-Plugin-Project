@@ -1,482 +1,307 @@
-#include "PluginProcessor.h"
 #include "PluginEditor.h"
 
-//==============================================================================
-// EffectPanel
-//==============================================================================
-EffectPanel::EffectPanel (const juce::String& title,
-                           juce::AudioProcessorValueTreeState& apvts,
-                           const juce::String& bypassParamId,
-                           const std::vector<std::pair<juce::String, juce::String>>& paramLabels)
-    : panelTitle (title)
+namespace forge
 {
-    bypassBtn.setClickingTogglesState (true);
-    addAndMakeVisible (bypassBtn);
-    bypassAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
-        apvts, bypassParamId, bypassBtn);
+using namespace juce;
+using namespace pixel;
 
-    for (auto& [paramId, labelText] : paramLabels)
+namespace
+{
+    constexpr int kTop = 28, kColW = 38, kColH = 276;
+    constexpr int kInX = 6, kOutX = MainView::W - 6 - kColW;
+    constexpr int kTileX = 51, kTileW = 60, kTileH = 42, kTileStep = 70;
+    constexpr int kWireY = kTop + kTileH / 2;
+
+    // Which page each chain tile opens.
+    constexpr int tilePage[6] { 0, 0, 1, 2, 3, 3 };
+
+    String paramText (ForgeAmpProcessor& p, const char* id)
     {
-        auto knob = std::make_unique<juce::Slider> (juce::Slider::RotaryVerticalDrag,
-                                                     juce::Slider::NoTextBox);
-        addAndMakeVisible (*knob);
+        return p.apvts.getParameter (id)->getCurrentValueAsText();
+    }
 
-        auto lbl = std::make_unique<juce::Label>();
-        lbl->setText (labelText, juce::dontSendNotification);
-        lbl->setJustificationType (juce::Justification::centred);
-        addAndMakeVisible (*lbl);
-
-        sliderAttachments.push_back (
-            std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
-                apvts, paramId, *knob));
-        knobLabels.push_back (std::move (lbl));
-        knobs.push_back (std::move (knob));
+    /** The x ranges of the wires: IN -> tiles -> OUT. */
+    std::array<Range<int>, 7> wireSpans()
+    {
+        std::array<Range<int>, 7> spans;
+        spans[0] = { kInX + kColW, kTileX };
+        for (int i = 1; i < 6; ++i)
+            spans[(size_t) i] = { kTileX + (i - 1) * kTileStep + kTileW, kTileX + i * kTileStep };
+        spans[6] = { kTileX + 5 * kTileStep + kTileW, kOutX };
+        return spans;
     }
 }
 
-void EffectPanel::paint (juce::Graphics& g)
+MainView::MainView (ForgeAmpProcessor& p)
+    : proc (p),
+      presetBar (p.getPresetManager(), prompt),
+      inputKnob (p.apvts, ids::inputGain, "Level", "Input level into the rig. Aim for peaks around -12 to -6 dB.", true, 9),
+      outputKnob (p.apvts, ids::outputGain, "Level", "Final output level.", true, 9),
+      prePage (p), ampPage (p), cabPage (p, prompt), fxPage (p)
 {
-    auto b = getLocalBounds().reduced (2);
-    const int px = 2;
-    const int headerH = juce::roundToInt (getHeight() * 0.16f);
+    markAsCanvas (*this);
+    setOpaque (true);
 
-    // Frosted glass card with a deep-blue pixel border
-    PixelLookAndFeel::fillSteppedRect (g, b, px, PixelLookAndFeel::deepBlue.withAlpha (0.60f));
-    PixelLookAndFeel::fillSteppedRect (g, b.reduced (2), px, juce::Colours::white.withAlpha (0.38f));
+    addAndMakeVisible (presetBar);
+    addAndMakeVisible (viewButton);
+    addAndMakeVisible (inputKnob);
+    addAndMakeVisible (outputKnob);
+    addAndMakeVisible (inMeter);
+    addAndMakeVisible (outMeter);
+    inMeter.setTooltip ("Input level before the gate. Click to clear the CLIP light.");
+    outMeter.setTooltip ("Output level. Click to clear the CLIP light.");
+    viewButton.setTooltip ("Zoom and version");
+    viewButton.setMouseCursor (MouseCursor::PointingHandCursor);
+    viewButton.onClick = [this] { showViewMenu(); };
 
-    // Glossy aqua header strip
-    auto header = b.reduced (2).removeFromTop (headerH);
-    PixelLookAndFeel::fillGlossSteppedRect (g, header, px, PixelLookAndFeel::glossBlue, true, false);
-    g.setColour (PixelLookAndFeel::deepBlue);
-    g.fillRect (header.getX(), header.getBottom() - 1, header.getWidth(), 1);
+    const struct { const char* name; Icon icon; const char* param; } tileInfo[6] {
+        { "Gate",   Icon::gate,   ids::gateOn },
+        { "Boost",  Icon::boost,  ids::boostOn },
+        { "Amp",    Icon::amp,    ids::ampOn },
+        { "Cab",    Icon::cab,    ids::cabOn },
+        { "Delay",  Icon::delay,  ids::delayOn },
+        { "Reverb", Icon::reverb, ids::reverbOn },
+    };
 
-    g.setFont (PixelLookAndFeel::pixelFont ((float) headerH * 0.42f, true));
-    auto titleArea = juce::Rectangle<int> (10, header.getY(),
-                                           getWidth() - bypassBtn.getWidth() - 20, header.getHeight());
-    g.setColour (PixelLookAndFeel::navy.withAlpha (0.55f));
-    g.drawFittedText (panelTitle, titleArea.translated (1, 1), juce::Justification::centredLeft, 1);
-    g.setColour (juce::Colours::white);
-    g.drawFittedText (panelTitle, titleArea, juce::Justification::centredLeft, 1);
-}
-
-void EffectPanel::resized()
-{
-    const int headerH = juce::roundToInt (getHeight() * 0.16f);
-    const int bypassW = juce::roundToInt (getWidth()  * 0.28f);
-
-    bypassBtn.setBounds (getWidth() - bypassW - 6, 5, bypassW, headerH - 6);
-
-    const int numKnobs  = (int) knobs.size();
-    if (numKnobs == 0) return;
-
-    // Two-row grid for 4+ knobs so the orbs get room to breathe
-    const int rows = numKnobs > 3 ? 2 : 1;
-    const int cols = (numKnobs + rows - 1) / rows;
-
-    const int areaY  = headerH + 6;
-    const int areaH  = getHeight() - areaY - 6;
-    const int rowH   = areaH / rows;
-    const int slotW  = (getWidth() - 8) / cols;
-    const int labelH = juce::roundToInt (rowH * 0.16f);
-    const int knobSize = juce::jmin (slotW - 8, rowH - labelH - 8);
-
-    for (int i = 0; i < numKnobs; ++i)
+    for (int i = 0; i < 6; ++i)
     {
-        const int row         = i / cols;
-        const int col         = i - row * cols;
-        const int colsThisRow = (row == rows - 1) ? numKnobs - cols * (rows - 1) : cols;
-        const int rowX0       = 4 + (getWidth() - 8 - colsThisRow * slotW) / 2;
-
-        const int x0 = rowX0 + col * slotW;
-        const int y0 = areaY + row * rowH;
-        const int kx = x0 + (slotW - knobSize) / 2;
-        const int ky = y0 + (rowH - labelH - knobSize) / 2;
-        knobs[i]->setBounds (kx, ky, knobSize, knobSize);
-        knobLabels[i]->setBounds (x0, ky + knobSize, slotW, labelH);
+        auto& tile = tiles[(size_t) i];
+        tile = std::make_unique<ChainTile> (tileInfo[i].name, tileInfo[i].icon, p.apvts, tileInfo[i].param);
+        tile->onSelect = [this, i] { showPage (tilePage[i]); };
+        tile->setSummary (summaryFor (i));
+        addAndMakeVisible (*tile);
     }
+
+    pages = { &prePage, &ampPage, &cabPage, &fxPage };
+    for (auto* page : pages)
+        addChildComponent (page);
+
+    addChildComponent (prompt);   // last, so it sits on top
+    addMouseListener (this, true);
+
+    showPage (jlimit (0, 3, proc.uiPage));
+    startTimerHz (30);
 }
 
-//==============================================================================
-// NewProjectAudioProcessorEditor
-//==============================================================================
-NewProjectAudioProcessorEditor::NewProjectAudioProcessorEditor (NewProjectAudioProcessor& p)
-    : AudioProcessorEditor (&p),
-      audioProcessor (p),
-      presetMgr (p),
-      distortionPanel ("DISTORTION", p.apvts, "distortionOn",
-                       { {"distDrive", "DRIVE"}, {"distBass", "BASS"}, {"distMid", "MID"},
-                         {"distTreble", "TREB"}, {"distGate", "GATE"}, {"level", "LEVEL"} }),
-      delayPanel     ("DELAY",     p.apvts, "delayOn",
-                       { {"delayTime", "TIME"}, {"delayFeedback", "FDBK"},
-                         {"delayTone", "TONE"}, {"delayMix", "MIX"} }),
-      reverbPanel    ("REVERB",    p.apvts, "reverbOn",
-                       { {"reverbRoom", "ROOM"}, {"reverbPreDelay", "PRE-D"},
-                         {"reverbDamp", "DAMP"}, {"reverbMix", "MIX"} })
+MainView::~MainView()
 {
-    setLookAndFeel (&laf);
-
-    addAndMakeVisible (distortionPanel);
-    addAndMakeVisible (delayPanel);
-    addAndMakeVisible (reverbPanel);
-
-    // ── NAM Model selector ─────────────────────────────────────────────────
-    modelBarLabel.setText ("MODEL:", juce::dontSendNotification);
-    modelBarLabel.setJustificationType (juce::Justification::centredRight);
-    addAndMakeVisible (modelBarLabel);
-
-    modelSelector.setJustificationType (juce::Justification::centredLeft);
-    modelSelector.onChange = [this]
-    {
-        int idx = modelSelector.getSelectedItemIndex();
-        if (idx >= 0)
-        {
-            auto names = audioProcessor.getAvailableModelNames();
-            if (idx < names.size())
-            {
-                audioProcessor.loadModelByName (names[idx]);
-            }
-        }
-    };
-    addAndMakeVisible (modelSelector);
-
-    loadModelBtn.onClick = [this] { onLoadModelFile(); };
-    addAndMakeVisible (loadModelBtn);
-
-    refreshModelList();
-
-    // ── NAM status indicator ────────────────────────────────────────────────
-    namStatusLabel.setJustificationType (juce::Justification::centred);
-    namStatusLabel.setColour (juce::Label::backgroundColourId, juce::Colours::transparentBlack);
-    addAndMakeVisible (namStatusLabel);
-    startTimerHz (4);   // 4 Hz refresh for status
-
-    // ── Preset bar ──────────────────────────────────────────────────────────
-    presetLbl.setJustificationType (juce::Justification::centred);
-    addAndMakeVisible (presetLbl);
-
-    prevBtn.onClick = [this] { presetMgr.prevPreset();  refreshPresetLabel(); };
-    nextBtn.onClick = [this] { presetMgr.nextPreset();  refreshPresetLabel(); };
-    saveBtn.onClick = [this] { presetMgr.saveCurrentPreset ([this] { refreshPresetLabel(); }); };
-    renameBtn.onClick = [this] { onRename(); };
-    deleteBtn.onClick = [this] { onDelete(); };
-
-    for (auto* b : { &prevBtn, &nextBtn, &saveBtn, &renameBtn, &deleteBtn })
-        addAndMakeVisible (b);
-
-    // ── Size buttons ────────────────────────────────────────────────────────
-    sizeS.setClickingTogglesState (true);
-    sizeM.setClickingTogglesState (true);
-    sizeL.setClickingTogglesState (true);
-
-    sizeS.onClick = [this] {
-        sizeS.setToggleState (true,  juce::dontSendNotification);
-        sizeM.setToggleState (false, juce::dontSendNotification);
-        sizeL.setToggleState (false, juce::dontSendNotification);
-        setSize (600, 340);
-    };
-    sizeM.onClick = [this] {
-        sizeS.setToggleState (false, juce::dontSendNotification);
-        sizeM.setToggleState (true,  juce::dontSendNotification);
-        sizeL.setToggleState (false, juce::dontSendNotification);
-        setSize (900, 500);
-    };
-    sizeL.onClick = [this] {
-        sizeS.setToggleState (false, juce::dontSendNotification);
-        sizeM.setToggleState (false, juce::dontSendNotification);
-        sizeL.setToggleState (true,  juce::dontSendNotification);
-        setSize (1200, 660);
-    };
-
-    for (auto* b : { &sizeS, &sizeM, &sizeL })
-        addAndMakeVisible (b);
-
-    refreshPresetLabel();
-
-    sizeM.setToggleState (true, juce::dontSendNotification);
-    setSize (900, 500);
-}
-
-NewProjectAudioProcessorEditor::~NewProjectAudioProcessorEditor()
-{
+    removeMouseListener (this);
     stopTimer();
+}
+
+void MainView::showPage (int page)
+{
+    currentPage = jlimit (0, 3, page);
+    proc.uiPage = currentPage;
+    for (int i = 0; i < 4; ++i)
+        pages[(size_t) i]->setVisible (i == currentPage);
+    for (int i = 0; i < 6; ++i)
+        tiles[(size_t) i]->setSelected (tilePage[i] == currentPage);
+    pages[(size_t) currentPage]->refresh();
+}
+
+String MainView::summaryFor (int tile) const
+{
+    auto& p = proc;
+    switch (tile)
+    {
+        case 0: return paramText (p, ids::gateThreshold);
+        case 1: return "Drive " + paramText (p, ids::boostDrive);
+        case 2: return paramText (p, ids::ampModel) + " " + paramText (p, ids::ampGain);
+        case 3: return paramText (p, ids::cabModel);
+        case 4: return (p.apvts.getRawParameterValue (ids::delaySync)->load() >= 0.5f ? paramText (p, ids::delayDivision)
+                                                                                     : paramText (p, ids::delayTime))
+                       + " " + paramText (p, ids::delayMix);
+        case 5: return paramText (p, ids::reverbDecay) + " " + paramText (p, ids::reverbMix);
+        default: return {};
+    }
+}
+
+void MainView::updateStatus()
+{
+    String text;
+    auto* under = Desktop::getInstance().getMainMouseSource().getComponentUnderMouse();
+    if (under != nullptr && isParentOf (under))
+    {
+        for (auto* c = under; c != nullptr && c != this; c = c->getParentComponent())
+            if (auto* client = dynamic_cast<TooltipClient*> (c))
+                if (text = client->getTooltip(); text.isNotEmpty())
+                    break;
+    }
+
+    if (text != status)
+    {
+        status = text;
+        repaint (statusArea());
+    }
+}
+
+void MainView::timerCallback()
+{
+    const float inPeak = proc.inputMeter.take();
+    const float outPeak = proc.outputMeter.take();
+    inMeter.pushLevel (inPeak);
+    outMeter.pushLevel (outPeak);
+    prePage.pushInputLevel (inPeak);
+
+    for (auto& t : tiles)
+        t->refresh();
+
+    presetBar.refresh();
+    pages[(size_t) currentPage]->refresh();
+
+    ++tick;
+    if (tick % 6 == 0)
+        for (int i = 0; i < 6; ++i)
+            tiles[(size_t) i]->setSummary (summaryFor (i));
+
+    // Signal runs along the wires while there's audio at the output
+    const bool nowSignal = outPeak > 0.003f;
+    if (nowSignal || nowSignal != signal)
+    {
+        signal = nowSignal;
+        if (tick % 2 == 0)
+            wirePhase = (wirePhase + 1) & 3;
+        for (auto span : wireSpans())
+            repaint (span.getStart(), kWireY - 3, span.getLength() + 1, 7);
+    }
+
+    if (tick % 15 == 0)
+    {
+        cursorOn = ! cursorOn;
+        if (status.isEmpty())
+            repaint (statusArea());
+    }
+}
+
+void MainView::showViewMenu()
+{
+    PopupMenu menu;
+    menu.addSectionHeader ("Zoom");
+    const float current = proc.uiScale;
+    const std::array<float, 6> zooms { 1.0f, 1.5f, 2.0f, 2.5f, 3.0f, 4.0f };
+    for (int i = 0; i < (int) zooms.size(); ++i)
+    {
+        const float z = zooms[(size_t) i];
+        menu.addItem (i + 1, String (z, z == std::floor (z) ? 0 : 1) + "x   " + String (roundToInt ((float) W * z))
+                                 + " x " + String (roundToInt ((float) H * z)),
+                      true, std::abs (current - z) < 0.02f);
+    }
+    menu.addSeparator();
+    menu.addItem (100, String (info::productName) + " " + info::version, false);
+    menu.addItem (101, "Built " + String (info::buildDate), false);
+
+    menu.showMenuAsync (pixelMenuOptions (viewButton), [this, zooms] (int r)
+    {
+        if (r >= 1 && r <= (int) zooms.size() && onScaleRequested)
+            onScaleRequested (zooms[(size_t) r - 1]);
+    });
+}
+
+void MainView::resized()
+{
+    presetBar.setBounds (148, 5, 260, 15);
+    viewButton.setBounds (kOutX, 5, kColW, 15);
+
+    inputKnob.setBounds (kInX + 1, kTop + 14, kColW - 2, Knob::heightFor (9));
+    outputKnob.setBounds (kOutX + 1, kTop + 14, kColW - 2, Knob::heightFor (9));
+    inMeter.setBounds (kInX + 2, kTop + 64, kColW - 6, kColH - 68);
+    outMeter.setBounds (kOutX + 2, kTop + 64, kColW - 6, kColH - 68);
+
+    for (int i = 0; i < 6; ++i)
+        tiles[(size_t) i]->setBounds (kTileX + i * kTileStep, kTop, kTileW, kTileH);
+
+    for (auto* page : pages)
+        page->setBounds (50, 76, 412, 228);
+
+    prompt.setBounds (getLocalBounds());
+}
+
+void MainView::paint (Graphics& g)
+{
+    Pix p (g, *this);
+    p.fill (getLocalBounds(), paper);
+
+    // Header: anvil, wordmark, AMP tag, double rule
+    drawIcon (p, Icon::anvil, 8, 5);
+    p.text ("FORGE", 28, 5, ink, font(), 2);
+    const Rectangle<int> tag (93, 7, font().width ("AMP") + 6, 11);
+    p.fill (tag);
+    p.text ("AMP", tag.getX() + 3, tag.getY() + 2, paper);
+    p.hline (0, W - 1, 23);
+    p.dottedH (0, W - 1, 25);
+
+    // I/O columns
+    drawWindow (p, { kInX, kTop, kColW, kColH }, "In");
+    drawWindow (p, { kOutX, kTop, kColW, kColH }, "Out");
+
+    // Wires between the chain tiles, with the signal marching along them
+    for (auto span : wireSpans())
+    {
+        const int x0 = span.getStart(), x1 = span.getEnd() - 1;
+        for (int x = x0; x <= x1 - 1; ++x)
+            if (! signal || ((x - wirePhase) & 3) != 0)
+                p.dot (x, kWireY);
+        p.dot (x1 - 1, kWireY - 1);
+        p.dot (x1 - 1, kWireY + 1);
+        p.dot (x1 - 2, kWireY - 2);
+        p.dot (x1 - 2, kWireY + 2);
+        p.dot (x1, kWireY);
+    }
+
+    // Status bar: hover help, or a blinking prompt
+    const auto bar = statusArea();
+    p.hline (0, W - 1, bar.getY());
+    const auto version = "V" + String (info::version);
+    const int vw = tiny().width (version);
+    p.text (version, W - 14 - vw, bar.getY() + 5, ink, tiny());
+    if (status.isNotEmpty())
+    {
+        p.text (font().fit (status, W - 30 - vw), 6, bar.getY() + 4);
+    }
+    else
+    {
+        const int w = p.text ("Ready.", 6, bar.getY() + 4);
+        if (cursorOn)
+            p.fill ({ 6 + w + 3, bar.getY() + 4, 5, 7 });
+    }
+}
+} // namespace forge
+
+//==============================================================================
+ForgeAmpEditor::ForgeAmpEditor (ForgeAmpProcessor& p)
+    : AudioProcessorEditor (&p), proc (p), view (p)
+{
+    using forge::MainView;
+
+    // Read the saved zoom first: setResizeLimits() resizes the (still empty) editor, and
+    // resized() writes the zoom back to the processor.
+    const float zoom = juce::jlimit (1.0f, 4.0f, p.uiScale);
+
+    setLookAndFeel (&lookAndFeel);
+    view.setCachedComponentImage (new forge::pixel::CanvasCache (view));
+    addAndMakeVisible (view);
+
+    view.onScaleRequested = [this] (float z)
+    {
+        setSize (juce::roundToInt ((float) MainView::W * z), juce::roundToInt ((float) MainView::H * z));
+    };
+
+    setResizable (true, true);
+    setResizeLimits (MainView::W, MainView::H, MainView::W * 4, MainView::H * 4);
+    getConstrainer()->setFixedAspectRatio ((double) MainView::W / (double) MainView::H);
+    setSize (juce::roundToInt ((float) MainView::W * zoom), juce::roundToInt ((float) MainView::H * zoom));
+}
+
+ForgeAmpEditor::~ForgeAmpEditor()
+{
     setLookAndFeel (nullptr);
 }
 
-void NewProjectAudioProcessorEditor::timerCallback()
+void ForgeAmpEditor::resized()
 {
-    bool loaded = audioProcessor.isModelLoaded();
-    bool processing = audioProcessor.namIsProcessing.load (std::memory_order_relaxed);
-
-    if (loaded && processing)
-    {
-        namStatusLabel.setText ("NAM", juce::dontSendNotification);
-        namStatusLabel.setColour (juce::Label::textColourId, PixelLookAndFeel::statusGreen);
-    }
-    else if (loaded && !processing)
-    {
-        namStatusLabel.setText ("NAM?", juce::dontSendNotification);
-        namStatusLabel.setColour (juce::Label::textColourId, PixelLookAndFeel::statusAmber);
-    }
-    else
-    {
-        namStatusLabel.setText ("FALLBACK", juce::dontSendNotification);
-        namStatusLabel.setColour (juce::Label::textColourId, PixelLookAndFeel::statusRed);
-    }
-
-    // Update model bar label with error info if applicable
-    if (!loaded && audioProcessor.lastLoadError.isNotEmpty())
-    {
-        modelBarLabel.setText ("ERR:", juce::dontSendNotification);
-        modelBarLabel.setColour (juce::Label::textColourId, PixelLookAndFeel::statusRed);
-        // Hover either label to see the actual load error
-        modelBarLabel.setTooltip (audioProcessor.lastLoadError);
-        namStatusLabel.setTooltip (audioProcessor.lastLoadError);
-    }
-    else
-    {
-        modelBarLabel.setText (loaded ? "MODEL:" : "NO MODEL!", juce::dontSendNotification);
-        modelBarLabel.setColour (juce::Label::textColourId, PixelLookAndFeel::navy);
-        modelBarLabel.setTooltip ({});
-        namStatusLabel.setTooltip ({});
-    }
-}
-
-//==============================================================================
-void NewProjectAudioProcessorEditor::refreshModelList()
-{
-    modelSelector.clear (juce::dontSendNotification);
-    auto names = audioProcessor.getAvailableModelNames();
-
-    if (names.size() == 0)
-    {
-        // No models found — show helpful message
-        modelSelector.addItem ("-- No models found. Click LOAD .NAM --", 1);
-        modelSelector.setSelectedItemIndex (0, juce::dontSendNotification);
-        modelBarLabel.setText ("MODEL:", juce::dontSendNotification);
-        return;
-    }
-
-    for (int i = 0; i < names.size(); ++i)
-        modelSelector.addItem (names[i], i + 1);   // ComboBox IDs start at 1
-
-    // Select current model
-    int currentIdx = audioProcessor.getCurrentModelIndex();
-    if (currentIdx >= 0)
-        modelSelector.setSelectedItemIndex (currentIdx, juce::dontSendNotification);
-    else if (names.size() > 0)
-        modelSelector.setSelectedItemIndex (0, juce::dontSendNotification);
-
-    // Show model status
-    modelBarLabel.setText (audioProcessor.isModelLoaded() ? "MODEL:" : "NO MODEL!",
-                           juce::dontSendNotification);
-}
-
-void NewProjectAudioProcessorEditor::onLoadModelFile()
-{
-    auto chooser = std::make_shared<juce::FileChooser> (
-        "Load NAM Model",
-        juce::File::getSpecialLocation (juce::File::userHomeDirectory),
-        "*.nam");
-
-    chooser->launchAsync (juce::FileBrowserComponent::openMode
-                         | juce::FileBrowserComponent::canSelectFiles,
-        [this, chooser] (const juce::FileChooser& fc)
-        {
-            auto results = fc.getResults();
-            if (results.size() > 0)
-            {
-                auto file = results[0];
-                audioProcessor.importNAMModel (file);
-                refreshModelList();
-            }
-        });
-}
-
-//==============================================================================
-// Drag & Drop support — drop .nam files directly onto the plugin window
-//==============================================================================
-bool NewProjectAudioProcessorEditor::isInterestedInFileDrag (const juce::StringArray& files)
-{
-    for (auto& f : files)
-        if (f.endsWithIgnoreCase (".nam"))
-            return true;
-    return false;
-}
-
-void NewProjectAudioProcessorEditor::filesDropped (const juce::StringArray& files, int, int)
-{
-    for (auto& f : files)
-    {
-        juce::File file (f);
-        if (file.hasFileExtension (".nam"))
-        {
-            audioProcessor.importNAMModel (file);
-            refreshModelList();
-            break;  // Load first valid .nam file
-        }
-    }
-}
-
-//==============================================================================
-void NewProjectAudioProcessorEditor::refreshPresetLabel()
-{
-    presetLbl.setText (presetMgr.getPresetName (presetMgr.getCurrentIndex()),
-                        juce::dontSendNotification);
-    const bool isFactory = presetMgr.isFactory (presetMgr.getCurrentIndex());
-    renameBtn.setEnabled (!isFactory);
-    deleteBtn.setEnabled (!isFactory);
-}
-
-void NewProjectAudioProcessorEditor::onRename()
-{
-    if (presetMgr.isFactory (presetMgr.getCurrentIndex())) return;
-
-    auto* dlg = new juce::AlertWindow ("RENAME PRESET", "Enter new name:",
-                                        juce::MessageBoxIconType::NoIcon);
-    dlg->addTextEditor ("name", presetMgr.getPresetName (presetMgr.getCurrentIndex()));
-    dlg->addButton ("OK",     1, juce::KeyPress (juce::KeyPress::returnKey));
-    dlg->addButton ("CANCEL", 0, juce::KeyPress (juce::KeyPress::escapeKey));
-
-    dlg->enterModalState (true, juce::ModalCallbackFunction::create (
-        [this, dlg] (int result) {
-            if (result == 1)
-            {
-                auto name = dlg->getTextEditorContents ("name").trim();
-                if (name.isNotEmpty())
-                {
-                    presetMgr.renamePreset (presetMgr.getCurrentIndex(), name);
-                    refreshPresetLabel();
-                }
-            }
-        }), true);
-}
-
-void NewProjectAudioProcessorEditor::onDelete()
-{
-    if (presetMgr.isFactory (presetMgr.getCurrentIndex())) return;
-
-    const auto name = presetMgr.getPresetName (presetMgr.getCurrentIndex());
-    auto* dlg = new juce::AlertWindow ("DELETE PRESET",
-                                        "Delete \"" + name + "\"?",
-                                        juce::MessageBoxIconType::NoIcon);
-    dlg->addButton ("DELETE", 1, juce::KeyPress (juce::KeyPress::returnKey));
-    dlg->addButton ("CANCEL", 0, juce::KeyPress (juce::KeyPress::escapeKey));
-
-    dlg->enterModalState (true, juce::ModalCallbackFunction::create (
-        [this, dlg] (int result) {
-            if (result == 1)
-            {
-                presetMgr.deletePreset (presetMgr.getCurrentIndex());
-                presetMgr.loadPreset   (presetMgr.getCurrentIndex());
-                refreshPresetLabel();
-            }
-        }), true);
-}
-
-//==============================================================================
-void NewProjectAudioProcessorEditor::paint (juce::Graphics& g)
-{
-    const int W = getWidth(), H = getHeight();
-    const int px = juce::jmax (2, H / 220);
-
-    // ── Dithered sky ─────────────────────────────────────────────────────
-    PixelLookAndFeel::fillDitheredV (g, getLocalBounds(),
-                                     PixelLookAndFeel::skyTop, PixelLookAndFeel::skyBottom,
-                                     8, px);
-
-    // Pixel clouds drifting behind the frosted panels
-    PixelLookAndFeel::drawPixelCloud (g, (int) (W * 0.06f), (int) (H * 0.30f), px * 2, 0.55f);
-    PixelLookAndFeel::drawPixelCloud (g, (int) (W * 0.52f), (int) (H * 0.24f), px * 3, 0.45f);
-    PixelLookAndFeel::drawPixelCloud (g, (int) (W * 0.78f), (int) (H * 0.52f), px * 2, 0.40f);
-    PixelLookAndFeel::drawPixelCloud (g, (int) (W * 0.24f), (int) (H * 0.68f), px * 3, 0.35f);
-
-    // Rising bubbles
-    PixelLookAndFeel::fillPixelCircleFlat (g, W * 0.90f, H * 0.72f, px * 5.0f,
-                                           juce::Colours::white.withAlpha (0.20f), px);
-    PixelLookAndFeel::fillPixelCircleFlat (g, W * 0.94f, H * 0.58f, px * 3.0f,
-                                           juce::Colours::white.withAlpha (0.25f), px);
-    PixelLookAndFeel::fillPixelCircleFlat (g, W * 0.87f, H * 0.44f, px * 2.0f,
-                                           juce::Colours::white.withAlpha (0.30f), px);
-
-    const int topBarH    = H / 13;
-    const int modelBarH  = topBarH;
-    const int presetBarH = topBarH;
-
-    // ── Glossy deep-blue title bar ───────────────────────────────────────
-    auto titleBar = juce::Rectangle<int> (0, 0, W, topBarH);
-    PixelLookAndFeel::fillGlossSteppedRect (g, titleBar, px, PixelLookAndFeel::deepBlue,
-                                            false, false);
-    g.setColour (PixelLookAndFeel::navy);
-    g.fillRect (0, topBarH - 1, W, 1);
-
-    // ── Frosted strips behind the model & preset bars ────────────────────
-    g.setColour (juce::Colours::white.withAlpha (0.30f));
-    g.fillRect (0, topBarH, W, modelBarH + presetBarH);
-    g.setColour (PixelLookAndFeel::deepBlue.withAlpha (0.35f));
-    g.fillRect (0, topBarH + modelBarH - 1, W, 1);
-    g.fillRect (0, topBarH + modelBarH + presetBarH - 1, W, 1);
-
-    // Sparkles on the title bar
-    PixelLookAndFeel::drawSparkle (g, (int) (W * 0.62f), topBarH / 2, juce::jmax (1, px / 2), 0.8f);
-    PixelLookAndFeel::drawSparkle (g, (int) (W * 0.66f), topBarH / 3, juce::jmax (1, px / 3), 0.5f);
-
-    // Title text with pixel drop shadow
-    g.setFont (PixelLookAndFeel::pixelFont ((float) topBarH * 0.48f, true));
-    g.setColour (PixelLookAndFeel::navy.withAlpha (0.65f));
-    g.drawFittedText ("FRUGUITAR AUDIO", 9, 1, W / 2, topBarH, juce::Justification::centredLeft, 1);
-    g.setColour (juce::Colours::white);
-    g.drawFittedText ("FRUGUITAR AUDIO", 8, 0, W / 2, topBarH, juce::Justification::centredLeft, 1);
-}
-
-void NewProjectAudioProcessorEditor::resized()
-{
-    const int W         = getWidth();
-    const int H         = getHeight();
-    const int topBarH   = H / 13;
-    const int modelBarH = topBarH;
-    const int presetH   = topBarH;
-    const int panelY    = topBarH + modelBarH + presetH;
-    const int panelH    = H - panelY;
-    const int panelW    = W / 3;
-
-    // ── Size buttons (top-right) ─────────────────────────────────────────
-    const int sbH = topBarH - 8;
-    const int sbW = sbH + 4;
-    sizeL.setBounds (W - sbW - 4,         4, sbW, sbH);
-    sizeM.setBounds (W - sbW * 2 - 8,     4, sbW, sbH);
-    sizeS.setBounds (W - sbW * 3 - 12,    4, sbW, sbH);
-
-    // ── NAM Model selector bar ──────────────────────────────────────────
-    const int mbY = topBarH + 2;
-    const int mbH = modelBarH - 4;
-    const int labelW  = juce::roundToInt (W * 0.08f);
-    const int loadW   = juce::roundToInt (W * 0.12f);
-    const int statusW = juce::roundToInt (W * 0.09f);
-    const int comboW  = W - labelW - loadW - statusW - 20;
-
-    int mx = 4;
-    modelBarLabel.setBounds  (mx, mbY, labelW,  mbH);  mx += labelW + 2;
-    modelSelector.setBounds  (mx, mbY, comboW,  mbH);  mx += comboW + 4;
-    loadModelBtn.setBounds   (mx, mbY, loadW,   mbH);  mx += loadW + 4;
-    namStatusLabel.setBounds (mx, mbY, statusW, mbH);
-
-    // ── Preset bar ──────────────────────────────────────────────────────
-    const int pbY     = topBarH + modelBarH + 2;
-    const int pbH     = presetH - 4;
-    const int arrowW  = pbH;
-    const int actW    = juce::roundToInt (W * 0.085f);
-    const int nameW   = W - arrowW * 2 - actW * 3 - 14;
-
-    int px = 2;
-    prevBtn  .setBounds (px, pbY, arrowW, pbH); px += arrowW + 2;
-    presetLbl.setBounds (px, pbY, nameW,  pbH); px += nameW  + 2;
-    nextBtn  .setBounds (px, pbY, arrowW, pbH); px += arrowW + 4;
-    saveBtn  .setBounds (px, pbY, actW,   pbH); px += actW   + 2;
-    renameBtn.setBounds (px, pbY, actW,   pbH); px += actW   + 2;
-    deleteBtn.setBounds (px, pbY, actW,   pbH);
-
-    // ── Effect panels ────────────────────────────────────────────────────
-    distortionPanel.setBounds (0,          panelY, panelW, panelH);
-    delayPanel    .setBounds (panelW,     panelY, panelW, panelH);
-    reverbPanel   .setBounds (panelW * 2, panelY, panelW, panelH);
+    const float zoom = (float) getWidth() / (float) forge::MainView::W;
+    view.setTransform (juce::AffineTransform::scale (zoom));
+    view.setBounds (0, 0, forge::MainView::W, forge::MainView::H);
+    proc.uiScale = zoom;
 }

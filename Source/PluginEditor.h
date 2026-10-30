@@ -1,91 +1,77 @@
 #pragma once
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
-#include "PixelLookAndFeel.h"
-#include "PresetManager.h"
+#include "ui/PixelLookAndFeel.h"
+#include "ui/Widgets.h"
+#include "ui/Pages.h"
 
-//==============================================================================
-// A single effect panel: title bar with bypass toggle + N rotary knobs
-//==============================================================================
-class EffectPanel : public juce::Component
+namespace forge
+{
+/** The whole UI as 1-bit pixel art on a 512 x 320 canvas; the editor zooms it to the window. */
+class MainView : public juce::Component, private juce::Timer
 {
 public:
-    EffectPanel (const juce::String& title,
-                 juce::AudioProcessorValueTreeState& apvts,
-                 const juce::String& bypassParamId,
-                 const std::vector<std::pair<juce::String, juce::String>>& paramLabels);
+    static constexpr int W = 512, H = 320;
 
-    void paint   (juce::Graphics&) override;
-    void resized () override;
+    explicit MainView (ForgeAmpProcessor&);
+    ~MainView() override;
+
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void showPage (int page);
+
+    void mouseEnter (const juce::MouseEvent&) override { updateStatus(); }
+    void mouseMove (const juce::MouseEvent&) override  { updateStatus(); }
+    void mouseExit (const juce::MouseEvent&) override  { updateStatus(); }
+    void mouseUp (const juce::MouseEvent&) override    { updateStatus(); }
+
+    std::function<void (float)> onScaleRequested;
 
 private:
-    juce::String panelTitle;
-    juce::ToggleButton bypassBtn;
-
-    // Knobs / labels declared before attachments — destroyed after them
-    std::vector<std::unique_ptr<juce::Slider>> knobs;
-    std::vector<std::unique_ptr<juce::Label>>  knobLabels;
-    std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>> sliderAttachments;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>              bypassAttachment;
-
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (EffectPanel)
-};
-
-//==============================================================================
-class NewProjectAudioProcessorEditor : public juce::AudioProcessorEditor,
-                                        public juce::FileDragAndDropTarget,
-                                        private juce::Timer
-{
-public:
-    explicit NewProjectAudioProcessorEditor (NewProjectAudioProcessor&);
-    ~NewProjectAudioProcessorEditor() override;
-
-    void paint   (juce::Graphics&) override;
-    void resized () override;
-
-    // ── FileDragAndDropTarget ────────────────────────────────────────────
-    bool isInterestedInFileDrag (const juce::StringArray& files) override;
-    void filesDropped (const juce::StringArray& files, int x, int y) override;
-
-    // ── Timer (updates NAM status indicator) ────────────────────────────
     void timerCallback() override;
+    void showViewMenu();
+    void updateStatus();
+    juce::String summaryFor (int tile) const;
+    juce::Rectangle<int> statusArea() const { return { 0, H - 13, W, 13 }; }
+    juce::Rectangle<int> wireArea() const   { return { 43, 44, 426, 11 }; }
+
+    ForgeAmpProcessor& proc;
+    PromptOverlay prompt;
+    PresetBar presetBar;
+    juce::TextButton viewButton { "VIEW" };
+    Knob inputKnob, outputKnob;
+    LevelMeterView inMeter, outMeter;
+    std::array<std::unique_ptr<ChainTile>, 6> tiles;
+    PrePage prePage;
+    AmpPage ampPage;
+    CabPage cabPage;
+    FxPage fxPage;
+    std::array<Page*, 4> pages {};
+    juce::String status;
+    int currentPage = 1, tick = 0, wirePhase = 0;
+    bool signal = false, cursorOn = true;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainView)
+};
+} // namespace forge
+
+//==============================================================================
+class ForgeAmpEditor : public juce::AudioProcessorEditor
+{
+public:
+    explicit ForgeAmpEditor (ForgeAmpProcessor&);
+    ~ForgeAmpEditor() override;
+
+    void resized() override;
+    void paint (juce::Graphics& g) override { g.fillAll (forge::pixel::paper); }
+
+    /** 0 = pre (gate + boost), 1 = amp, 2 = cab, 3 = effects. */
+    void showPage (int page) { view.showPage (page); }
 
 private:
-    void applySize (int w, int h);
-    void refreshPresetLabel();
-    void onRename();
-    void onDelete();
+    ForgeAmpProcessor& proc;
+    forge::PixelLookAndFeel lookAndFeel;
+    forge::MainView view;
 
-    // ── NAM Model Selector ──────────────────────────────────────────────
-    void refreshModelList();
-    void onLoadModelFile();
-
-    NewProjectAudioProcessor& audioProcessor;
-    PixelLookAndFeel laf;
-    PresetManager    presetMgr;
-    juce::TooltipWindow tooltipWindow { this };
-
-    // ── Effect panels ──────────────────────────────────────────────────────
-    EffectPanel distortionPanel, delayPanel, reverbPanel;
-
-    // ── NAM Model selector bar ──────────────────────────────────────────
-    juce::ComboBox   modelSelector;
-    juce::TextButton loadModelBtn  { "LOAD .NAM" };
-    juce::Label      modelBarLabel;
-    juce::Label      namStatusLabel;   // shows "NAM" (green) or "FALLBACK" (red)
-
-    // ── Preset bar ────────────────────────────────────────────────────────
-    juce::TextButton prevBtn   { "<" };
-    juce::TextButton nextBtn   { ">" };
-    juce::Label      presetLbl;
-    juce::TextButton saveBtn   { "SAVE"   };
-    juce::TextButton renameBtn { "RENAME" };
-    juce::TextButton deleteBtn { "DELETE" };
-
-    // ── Size buttons ──────────────────────────────────────────────────────
-    juce::TextButton sizeS { "S" };
-    juce::TextButton sizeM { "M" };
-    juce::TextButton sizeL { "L" };
-
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NewProjectAudioProcessorEditor)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ForgeAmpEditor)
 };

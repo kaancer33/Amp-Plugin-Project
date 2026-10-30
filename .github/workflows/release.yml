@@ -14,22 +14,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Get JUCE
-        run: git clone --depth 1 --branch 8.0.4 https://github.com/juce-framework/JUCE.git "${{ runner.temp }}\JUCE"
-
+      # CMakeLists.txt fetches the pinned JUCE release itself (FORGE_JUCE_TAG).
       - name: Configure
-        run: cmake -B build -DJUCE_PATH="${{ runner.temp }}\JUCE"
+        run: cmake -B build -DFORGE_BUILD_TESTS=OFF
 
       - name: Build
-        run: cmake --build build --config Release
+        run: cmake --build build --config Release --target ForgeAmp_VST3 ForgeAmp_Standalone
 
       - name: Package
         shell: pwsh
         run: |
-          $staging = "FruGuitar-Audio-${{ github.ref_name }}-win64"
+          $staging = "Forge-Amp-${{ github.ref_name }}-win64"
           New-Item -ItemType Directory $staging | Out-Null
-          Copy-Item -Recurse "build/NewProject_artefacts/Release/VST3/FruGuitar Audio.vst3" "$staging/"
-          Copy-Item "build/NewProject_artefacts/Release/Standalone/FruGuitar Audio.exe" "$staging/"
+          Copy-Item -Recurse "build/ForgeAmp_artefacts/Release/VST3/Forge Amp.vst3" "$staging/"
+          Copy-Item "build/ForgeAmp_artefacts/Release/Standalone/Forge Amp.exe" "$staging/"
           Copy-Item README.md, LICENSE "$staging/"
           Compress-Archive -Path $staging -DestinationPath "$staging.zip"
 
@@ -37,33 +35,32 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          name: FruGuitar Audio ${{ github.ref_name }}
+          name: Forge Amp ${{ github.ref_name }}
           prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'rc') }}
-          files: FruGuitar-Audio-*.zip
+          files: Forge-Amp-*.zip
           body: |
-            The first public beta of **FruGuitar Audio** — a neural guitar amp sim (Neural Amp Modeler) with a pixel-art Frutiger Aero UI. 🎸
+            **Forge Amp**: a tube guitar amp simulator with a black-and-white, early-2000s pixel-art interface.
 
-            ![Pixel Aero UI](https://github.com/kaancer33/Amp-Plugin-Project/raw/main/docs/screenshot.png)
+            ![Forge Amp](https://github.com/kaancer33/Amp-Plugin-Project/raw/main/docs/screenshot-amp.png)
 
             ## Contents (Windows x64)
-            - **FruGuitar Audio.vst3** — copy the whole `.vst3` folder to `C:\Program Files\Common Files\VST3`, then rescan plugins in your DAW
-            - **FruGuitar Audio.exe** — standalone app, no DAW required
+            - **Forge Amp.vst3**: copy the whole `.vst3` folder to `C:\Program Files\Common Files\VST3`, then rescan plugins in your DAW
+            - **Forge Amp.exe**: standalone app, no DAW required
 
             ## Highlights
-            - Neural Amp Modeler engine: loads WaveNet / LSTM / ConvNet `.nam` captures — pick from the model bar or drag & drop a file onto the window
-            - Full chain: noise gate → NAM inference → 3-band tone stack → 4x12 cabinet sim → delay → reverb
-            - Pixel Aero UI: dithered skies, frosted-glass panels, glossy aqua orb knobs, three window sizes (S/M/L)
-            - Preset system with save / rename / delete
-            - Fixed: NAM models failing to load in plugin builds (empty architecture registry)
+            - Three voices modelled on the Fender Twin Reverb, Marshall JCM800 and Soldano SLO-100, with circuit-accurate tone stacks
+            - 4x-oversampled tube preamp stages and a power amp with presence, depth and sag
+            - Noise gate, TS808-style boost, speaker cabinets with IR loading, tempo-synced delay and an FDN reverb
+            - 1-bit pixel UI with bitmap fonts and dithering, crisp at 1x to 4x zoom
+            - 10 factory presets plus user presets
 
-            ## Beta notes
-            - Windows 64-bit only for now; macOS/Linux builds are untested
-            - The plugin ID changed with the FruGuitar Audio rename — DAW sessions that used old `NewProject` builds need the plugin re-added
-            - Model library: `%APPDATA%\FruGuitar Audio\Models` (an existing `NewProject` library migrates automatically)
+            ## Notes
+            - Forge Amp is a separate plugin from FruGuitar Audio: it does not load `.nam` models, and DAW sessions keep using whichever plugin they were saved with
+            - The binaries are unsigned, so Windows SmartScreen may warn the first time you run the standalone app
 
       - name: Upload build artifact (non-tag runs)
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: actions/upload-artifact@v4
         with:
-          name: FruGuitar-Audio-win64
-          path: FruGuitar-Audio-*.zip
+          name: Forge-Amp-win64
+          path: Forge-Amp-*.zip

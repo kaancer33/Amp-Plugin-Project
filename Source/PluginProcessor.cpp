@@ -1,815 +1,496 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
-// NAM Core includes
-#include "NAM/get_dsp.h"
-#include <filesystem>
+using namespace forge;
 
 //==============================================================================
-NewProjectAudioProcessor::NewProjectAudioProcessor()
+ForgeAmpProcessor::ForgeAmpProcessor()
     : AudioProcessor (BusesProperties()
-          .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
-          .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
+                          .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
+                          .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "Parameters", createParameterLayout())
 {
-    // Ensure models directory exists and try to load the first available model.
-    // getModelsDirectory() will copy bundled models to app data on first run.
-    auto modelsDir = getModelsDirectory();
-    auto namFiles = modelsDir.findChildFiles (juce::File::findFiles, false, "*.nam");
+    cacheParameterPointers();
 
-    if (namFiles.size() > 0)
-    {
-        // Prefer "default.nam" if it exists, otherwise load the first one
-        juce::File modelToLoad;
-        for (auto& f : namFiles)
+    presets = std::make_unique<PresetManager> (
+        apvts,
+        [this] (const juce::XmlElement* extra)
         {
-            if (f.getFileNameWithoutExtension().equalsIgnoreCase ("default"))
-            {
-                modelToLoad = f;
-                break;
-            }
-        }
-        if (!modelToLoad.existsAsFile())
-            modelToLoad = namFiles[0];
-
-        loadNAMModel (modelToLoad);
-    }
-
-    DBG ("NAM model loaded: " + juce::String (isModelLoaded() ? "YES" : "NO")
-         + " | Name: " + getModelName()
-         + " | Models dir: " + modelsDir.getFullPathName());
-}
-
-NewProjectAudioProcessor::~NewProjectAudioProcessor() {}
-
-//==============================================================================
-void NewProjectAudioProcessor::loadNAMModel (const juce::File& namFile)
-{
-    if (!namFile.existsAsFile())
-    {
-        lastLoadError = "File does not exist: " + namFile.getFullPathName();
-        DBG (lastLoadError);
-        return;
-    }
-
-    DBG ("NAM: Attempting to load: " + namFile.getFullPathName());
-    DBG ("NAM: File size = " + juce::String (namFile.getSize()) + " bytes");
-
-    try
-    {
-      #if JUCE_WINDOWS
-        // Use wide string on Windows to handle Turkish/Unicode characters in paths
-        std::filesystem::path namPath (namFile.getFullPathName().toWideCharPointer());
-      #else
-        std::filesystem::path namPath (namFile.getFullPathName().toStdString());
-      #endif
-        auto newModel = nam::get_dsp (namPath);
-        if (newModel)
+            const auto path = extra != nullptr ? extra->getStringAttribute ("userIR") : juce::String();
+            if (path.isNotEmpty() && juce::File (path).existsAsFile())
+                loadUserImpulseResponse (juce::File (path), false);
+        },
+        [this] (juce::XmlElement& extra)
         {
-            // Initialize model with current sample rate
-            const double sr = (currentSampleRate > 0) ? currentSampleRate : 48000.0;
-            const int maxBuf = 4096;
-            DBG ("NAM: Model created successfully, calling ResetAndPrewarm(sr=" + juce::String(sr) + ")");
-            newModel->ResetAndPrewarm (sr, maxBuf);
+            if (userIrLoaded.load())
+                extra.setAttribute ("userIR", getUserImpulseResponseFile().getFullPathName());
+        });
+}
 
-            // Hot-swap under lock
-            const juce::SpinLock::ScopedLockType lock (namModelLock);
-            namModel = std::move (newModel);
-            currentModelName = namFile.getFileNameWithoutExtension();
-            lastLoadError = "";
-            DBG ("NAM: Model loaded and active: " + currentModelName);
-        }
-        else
-        {
-            lastLoadError = "get_dsp returned nullptr for: " + namFile.getFileName();
-            DBG ("NAM: " + lastLoadError);
-        }
-    }
-    catch (const std::exception& e)
+ForgeAmpProcessor::~ForgeAmpProcessor() = default;
+
+void ForgeAmpProcessor::cacheParameterPointers()
+{
+    auto get = [this] (const char* id)
     {
-        lastLoadError = juce::String ("Load failed: ") + e.what();
-        DBG ("NAM: " + lastLoadError);
-    }
-    catch (...)
-    {
-        lastLoadError = "Unknown exception during model load";
-        DBG ("NAM: " + lastLoadError);
-    }
+        auto* v = apvts.getRawParameterValue (id);
+        jassert (v != nullptr);
+        return v;
+    };
+
+    p.inputGain = get (ids::inputGain);           p.outputGain = get (ids::outputGain);
+    p.gateOn = get (ids::gateOn);                 p.gateThreshold = get (ids::gateThreshold);
+    p.gateRelease = get (ids::gateRelease);
+    p.boostOn = get (ids::boostOn);               p.boostDrive = get (ids::boostDrive);
+    p.boostTone = get (ids::boostTone);           p.boostLevel = get (ids::boostLevel);
+    p.ampOn = get (ids::ampOn);                   p.ampModel = get (ids::ampModel);
+    p.ampGain = get (ids::ampGain);               p.ampBass = get (ids::ampBass);
+    p.ampMid = get (ids::ampMid);                 p.ampTreble = get (ids::ampTreble);
+    p.ampPresence = get (ids::ampPresence);       p.ampDepth = get (ids::ampDepth);
+    p.ampMaster = get (ids::ampMaster);
+    p.cabOn = get (ids::cabOn);                   p.cabModel = get (ids::cabModel);
+    p.cabMic = get (ids::cabMic);                 p.cabLowCut = get (ids::cabLowCut);
+    p.cabHighCut = get (ids::cabHighCut);
+    p.delayOn = get (ids::delayOn);               p.delaySync = get (ids::delaySync);
+    p.delayTime = get (ids::delayTime);           p.delayDivision = get (ids::delayDivision);
+    p.delayFeedback = get (ids::delayFeedback);   p.delayTone = get (ids::delayTone);
+    p.delayMix = get (ids::delayMix);             p.delayPingPong = get (ids::delayPingPong);
+    p.reverbOn = get (ids::reverbOn);             p.reverbSize = get (ids::reverbSize);
+    p.reverbDecay = get (ids::reverbDecay);       p.reverbPreDelay = get (ids::reverbPreDelay);
+    p.reverbTone = get (ids::reverbTone);         p.reverbMix = get (ids::reverbMix);
 }
 
 //==============================================================================
-// NAM Model Directory Management
-//==============================================================================
-juce::File NewProjectAudioProcessor::getModelsDirectory() const
+void ForgeAmpProcessor::prepareToPlay (double newSampleRate, int samplesPerBlock)
 {
-    // Use a persistent "Models" folder in the user's app data
-    // Windows: C:\Users\<user>\AppData\Roaming\FruGuitar Audio\Models
-    // macOS:   ~/Library/Application Support/FruGuitar Audio/Models
-    auto appData = juce::File::getSpecialLocation (
-        juce::File::userApplicationDataDirectory)
-        .getChildFile ("FruGuitar Audio").getChildFile ("Models");
+    sampleRate = newSampleRate;
+    maxBlock = std::max (1, samplesPerBlock);
 
-    if (!appData.isDirectory())
-        appData.createDirectory();
+    // Polyphase IIR half-band filters: low latency, and integer latency so the host can
+    // compensate exactly. The whole guitar chain always runs through the oversampler, so
+    // latency stays the same whether modules are on or off.
+    oversampler = std::make_unique<juce::dsp::Oversampling<float>> (
+        1, kOversamplingOrder, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, true);
+    oversampler->initProcessing ((size_t) maxBlock);
+    setLatencySamples ((int) std::lround (oversampler->getLatencyInSamples()));
 
-    // On first run, find bundled Models/ folder and copy .nam files to app data.
-    // We search aggressively — exe location, plugin location, and known paths.
-    juce::Array<juce::File> searchDirs;
+    const double osRate = sampleRate * (double) (1 << kOversamplingOrder);
 
-    // Legacy library from before the FruGuitar Audio rename — checked first so
-    // an existing collection migrates automatically.
-    searchDirs.add (juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
-                        .getChildFile ("NewProject").getChildFile ("Models"));
+    gate.prepare (sampleRate);
+    boost.prepare (osRate);
+    amp.prepare (osRate);
+    cab.prepare (sampleRate, maxBlock);
+    delay.prepare (sampleRate);
+    reverb.prepare (sampleRate);
 
-    // From the executable / plugin binary
-    auto exeDir = juce::File::getSpecialLocation (
-        juce::File::currentApplicationFile).getParentDirectory();
-    // Walk up to 8 levels (covers deep build paths like Builds/VS2022/x64/Debug/VST3/...)
-    auto dir = exeDir;
-    for (int i = 0; i < 8; ++i)
-    {
-        searchDirs.add (dir.getChildFile ("Models"));
-        dir = dir.getParentDirectory();
-    }
+    ampSwitch.prepare (osRate, 12.0);
+    cabSwitch.prepare (sampleRate, 12.0);
 
-    // From the current working directory
-    auto cwd = juce::File::getCurrentWorkingDirectory();
-    searchDirs.add (cwd.getChildFile ("Models"));
-    dir = cwd;
-    for (int i = 0; i < 5; ++i)
-    {
-        searchDirs.add (dir.getChildFile ("Models"));
-        dir = dir.getParentDirectory();
-    }
+    const double controlRate = osRate / (double) kControlInterval;
+    for (auto* s : { &sGain, &sBass, &sMid, &sTreble, &sPresence, &sDepth, &sMaster,
+                     &sBoostDrive, &sBoostTone, &sBoostLevel })
+        s->reset (controlRate, 0.04);
 
-    // Common Windows development locations
-  #if JUCE_WINDOWS
-    auto desktop = juce::File::getSpecialLocation (juce::File::userDesktopDirectory);
-    searchDirs.add (desktop.getChildFile ("plugin devoloping").getChildFile ("Amp-Plugin-Project-main").getChildFile ("Models"));
-    searchDirs.add (desktop.getChildFile ("plugin devoloping").getChildFile ("Models"));
-    searchDirs.add (desktop.getChildFile ("Amp-Plugin-Project-main").getChildFile ("Models"));
-    auto docs = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory);
-    searchDirs.add (docs.getChildFile ("Amp-Plugin-Project-main").getChildFile ("Models"));
-  #endif
+    inGain.reset (sampleRate, 0.03);
+    outGain.reset (sampleRate, 0.03);
+    cabMix.reset (sampleRate, 0.015);
+    boostMix.reset (osRate, 0.015);
+    ampMix.reset (osRate, 0.015);
 
-    // Try to find and copy bundled models
-    for (auto& d : searchDirs)
-    {
-        if (d.isDirectory())
-        {
-            auto namFiles = d.findChildFiles (juce::File::findFiles, false, "*.nam");
-            if (namFiles.size() > 0)
-            {
-                DBG ("Found bundled Models at: " + d.getFullPathName());
-                for (auto& f : namFiles)
-                {
-                    auto dest = appData.getChildFile (f.getFileName());
-                    if (!dest.existsAsFile())
-                        f.copyFileTo (dest);
-                }
-                break;  // Found it, stop searching
-            }
-        }
-    }
-
-    return appData;
+    monoBuffer.setSize (1, maxBlock);
+    dryBuffer.setSize (2, maxBlock);
+    firstBlock = true;
 }
 
-juce::StringArray NewProjectAudioProcessor::getAvailableModelNames() const
+void ForgeAmpProcessor::releaseResources()
 {
-    juce::StringArray names;
-    auto dir = getModelsDirectory();
-    if (dir.isDirectory())
-    {
-        auto files = dir.findChildFiles (juce::File::findFiles, false, "*.nam");
-        files.sort();
-        for (auto& f : files)
-            names.add (f.getFileNameWithoutExtension());
-    }
-    return names;
+    if (oversampler != nullptr)
+        oversampler->reset();
 }
 
-void NewProjectAudioProcessor::loadModelByName (const juce::String& name)
+bool ForgeAmpProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
-    auto dir = getModelsDirectory();
-    auto file = dir.getChildFile (name + ".nam");
-    if (file.existsAsFile())
-        loadNAMModel (file);
-}
+    if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
+        return false;
 
-void NewProjectAudioProcessor::importNAMModel (const juce::File& sourceFile)
-{
-    if (!sourceFile.existsAsFile() || sourceFile.getFileExtension().toLowerCase() != ".nam")
-        return;
-
-    auto dir = getModelsDirectory();
-    auto dest = dir.getChildFile (sourceFile.getFileName());
-
-    // If file already exists, add a number suffix
-    int counter = 1;
-    while (dest.existsAsFile())
-    {
-        dest = dir.getChildFile (sourceFile.getFileNameWithoutExtension()
-                                 + " (" + juce::String (counter++) + ").nam");
-    }
-
-    sourceFile.copyFileTo (dest);
-    loadNAMModel (dest);
-}
-
-int NewProjectAudioProcessor::getCurrentModelIndex() const
-{
-    auto names = getAvailableModelNames();
-    return names.indexOf (currentModelName);
+    const auto in = layouts.getMainInputChannelSet();
+    return in == juce::AudioChannelSet::mono() || in == juce::AudioChannelSet::stereo();
 }
 
 //==============================================================================
-// Parameter layout — 17 parameters
-//==============================================================================
-juce::AudioProcessorValueTreeState::ParameterLayout
-NewProjectAudioProcessor::createParameterLayout()
+void ForgeAmpProcessor::updateParameters()
 {
-    std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
+    auto v  = [] (std::atomic<float>* a) { return a->load (std::memory_order_relaxed); };
+    auto on = [&] (std::atomic<float>* a) { return v (a) >= 0.5f; };
 
-    // ── Bypass toggles ───────────────────────────────────────────────────
-    params.push_back (std::make_unique<juce::AudioParameterBool> (
-        "distortionOn", "Distortion On", true));
-    params.push_back (std::make_unique<juce::AudioParameterBool> (
-        "delayOn", "Delay On", true));
-    params.push_back (std::make_unique<juce::AudioParameterBool> (
-        "reverbOn", "Reverb On", true));
+    inGain.setTargetValue ((float) dbToGain (v (p.inputGain)));
+    outGain.setTargetValue ((float) dbToGain (v (p.outputGain)));
 
-    // ── Distortion (NAM) ────────────────────────────────────────────────
-    // Drive: input gain into the neural network (0-1 → -12..+12 dB)
-    params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        "distDrive", "Drive",
-        juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f, 0.4f), 0.3f));
+    gate.setParams (on (p.gateOn), v (p.gateThreshold), v (p.gateRelease));
 
-    // 3-band tone stack (post-NAM)
-    params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        "distBass", "Bass",
-        juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.5f));
-    params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        "distMid", "Mid",
-        juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.5f));
-    params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        "distTreble", "Treble",
-        juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.5f));
+    boostMix.setTargetValue (on (p.boostOn) ? 1.0f : 0.0f);
+    sBoostDrive.setTargetValue (v (p.boostDrive) * 0.1f);
+    sBoostTone.setTargetValue (v (p.boostTone) * 0.1f);
+    sBoostLevel.setTargetValue (v (p.boostLevel));
 
-    // Noise gate threshold (-80 = off, -20 = aggressive)
-    params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        "distGate", "Gate",
-        juce::NormalisableRange<float> (-80.0f, -20.0f, 0.5f), -55.0f));
+    ampMix.setTargetValue (on (p.ampOn) ? 1.0f : 0.0f);
+    sGain.setTargetValue (v (p.ampGain) * 0.1f);
+    sBass.setTargetValue (v (p.ampBass) * 0.1f);
+    sMid.setTargetValue (v (p.ampMid) * 0.1f);
+    sTreble.setTargetValue (v (p.ampTreble) * 0.1f);
+    sPresence.setTargetValue (v (p.ampPresence) * 0.1f);
+    sDepth.setTargetValue (v (p.ampDepth) * 0.1f);
+    sMaster.setTargetValue (v (p.ampMaster) * 0.1f);
 
-    params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        "level", "Level",
-        juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.5f));
+    pendingAmpModel = juce::jlimit (0, (int) ampVoices().size() - 1, (int) v (p.ampModel));
+    if (pendingAmpModel != amp.getVoice())
+        ampSwitch.request();
 
-    // ── Delay ────────────────────────────────────────────────────────────
-    params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        "delayTime", "Delay Time (ms)",
-        juce::NormalisableRange<float> (20.0f, 1000.0f, 1.0f), 250.0f));
-    params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        "delayFeedback", "Delay Feedback",
-        juce::NormalisableRange<float> (0.0f, 0.95f, 0.01f), 0.4f));
-    params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        "delayTone", "Delay Tone",
-        juce::NormalisableRange<float> (500.0f, 12000.0f, 1.0f, 0.35f), 6000.0f));
-    params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        "delayMix", "Delay Mix",
-        juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.3f));
+    // Until an IR is loaded, "User IR" falls back to the first built-in cab rather than
+    // letting the raw amp (which is very fizzy without a cab) through.
+    pendingCabModel = juce::jlimit (0, CabSim::kUserIR, (int) v (p.cabModel));
+    if (pendingCabModel == CabSim::kUserIR && ! userIrLoaded.load())
+        pendingCabModel = 0;
+    if (pendingCabModel != cab.getModel())
+        cabSwitch.request();
 
-    // ── Reverb ───────────────────────────────────────────────────────────
-    params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        "reverbRoom", "Reverb Room",
-        juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.5f));
-    params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        "reverbPreDelay", "Reverb Pre-Delay",
-        juce::NormalisableRange<float> (0.0f, 100.0f, 1.0f), 20.0f));
-    params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        "reverbDamp", "Reverb Damping",
-        juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.5f));
-    params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        "reverbMix", "Reverb Mix",
-        juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.2f));
+    cabMix.setTargetValue (on (p.cabOn) ? 1.0f : 0.0f);
+    cab.setTone (v (p.cabMic) * 0.1f, v (p.cabLowCut), v (p.cabHighCut));
 
-    return { params.begin(), params.end() };
+    const double delayMs = on (p.delaySync)
+        ? delayDivisionBeats ((int) v (p.delayDivision)) * 60000.0 / bpm.load()
+        : (double) v (p.delayTime);
+    delay.setParams (on (p.delayOn), delayMs, v (p.delayFeedback) * 0.01f, v (p.delayTone),
+                     v (p.delayMix) * 0.01f, on (p.delayPingPong));
+
+    reverb.setParams (on (p.reverbOn), v (p.reverbSize) * 0.1f, v (p.reverbDecay),
+                      v (p.reverbPreDelay), v (p.reverbTone), v (p.reverbMix) * 0.01f);
 }
 
-//==============================================================================
-const juce::String NewProjectAudioProcessor::getName() const { return JucePlugin_Name; }
-bool NewProjectAudioProcessor::acceptsMidi() const  { return false; }
-bool NewProjectAudioProcessor::producesMidi() const { return false; }
-bool NewProjectAudioProcessor::isMidiEffect() const { return false; }
-double NewProjectAudioProcessor::getTailLengthSeconds() const { return 10.0; }
-int NewProjectAudioProcessor::getNumPrograms()   { return 1; }
-int NewProjectAudioProcessor::getCurrentProgram() { return 0; }
-void NewProjectAudioProcessor::setCurrentProgram (int) {}
-const juce::String NewProjectAudioProcessor::getProgramName (int) { return {}; }
-void NewProjectAudioProcessor::changeProgramName (int, const juce::String&) {}
-
-//==============================================================================
-void NewProjectAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
-{
-    currentSampleRate = sampleRate;
-    const auto sr = (float) sampleRate;
-
-    // ── NAM model: reset to current sample rate ─────────────────────────
-    {
-        const juce::SpinLock::ScopedLockType lock (namModelLock);
-        if (namModel)
-            namModel->ResetAndPrewarm (sampleRate, samplesPerBlock);
-    }
-
-    // ── NAM internal buffers (double precision) ─────────────────────────
-    namInputBuffer.resize ((size_t) samplesPerBlock, 0.0);
-    namOutputBuffer.resize ((size_t) samplesPerBlock, 0.0);
-
-    // ── Noise gate ──────────────────────────────────────────────────────
-    gateL.prepare (sr); gateL.reset();
-    gateR.prepare (sr); gateR.reset();
-
-    // ── Pre-NAM HP at 80 Hz (remove sub-bass rumble before neural net) ──
-    preHPL.setCutoff (80.0f, sr); preHPL.reset();
-    preHPR.setCutoff (80.0f, sr); preHPR.reset();
-
-    // ── Post-NAM 3-band tone stack (flat defaults) ──────────────────────
-    bassEqL.setLowShelf (200.0f, 0.0f, sr);    bassEqL.reset();
-    bassEqR.setLowShelf (200.0f, 0.0f, sr);    bassEqR.reset();
-    midEqL.setPeakEQ (800.0f, 0.7f, 0.0f, sr); midEqL.reset();
-    midEqR.setPeakEQ (800.0f, 0.7f, 0.0f, sr); midEqR.reset();
-    trebleEqL.setHighShelf (3500.0f, 0.0f, sr); trebleEqL.reset();
-    trebleEqR.setHighShelf (3500.0f, 0.0f, sr); trebleEqR.reset();
-
-    // ── Cabinet simulation (SM57 on 4x12 V30) ──────────────────────────
-    cabHPL.setHighPass (70.0f, sr);               cabHPL.reset();
-    cabHPR.setHighPass (70.0f, sr);               cabHPR.reset();
-    cabResoL.setPeakEQ (120.0f, 1.5f, 3.0f, sr);  cabResoL.reset();
-    cabResoR.setPeakEQ (120.0f, 1.5f, 3.0f, sr);  cabResoR.reset();
-    cabBoxL.setPeakEQ (400.0f, 0.8f, -3.0f, sr);  cabBoxL.reset();
-    cabBoxR.setPeakEQ (400.0f, 0.8f, -3.0f, sr);  cabBoxR.reset();
-    cabPresL.setPeakEQ (2500.0f, 1.2f, 2.0f, sr); cabPresL.reset();
-    cabPresR.setPeakEQ (2500.0f, 1.2f, 2.0f, sr); cabPresR.reset();
-    cabNotchL.setPeakEQ (4500.0f, 2.0f, -6.0f, sr); cabNotchL.reset();
-    cabNotchR.setPeakEQ (4500.0f, 2.0f, -6.0f, sr); cabNotchR.reset();
-    cabLPL.setLowPass (5500.0f, sr);              cabLPL.reset();
-    cabLPR.setLowPass (5500.0f, sr);              cabLPR.reset();
-    cabLP2L.setLowPass (8000.0f, sr, 0.5f);       cabLP2L.reset();
-    cabLP2R.setLowPass (8000.0f, sr, 0.5f);       cabLP2R.reset();
-
-    levelSmoothed.reset (sampleRate, 0.05);
-
-    // ── Delay ────────────────────────────────────────────────────────────
-    juce::dsp::ProcessSpec monoSpec { sampleRate, (juce::uint32) samplesPerBlock, 1 };
-    delayL.prepare (monoSpec);
-    delayR.prepare (monoSpec);
-    int maxDelaySmp = (int) (kMaxDelaySeconds * sampleRate) + 1;
-    delayL.setMaximumDelayInSamples (maxDelaySmp);
-    delayR.setMaximumDelayInSamples (maxDelaySmp);
-    delayFbLPL.setCutoff (6000.0f, sr); delayFbLPL.reset();
-    delayFbLPR.setCutoff (6000.0f, sr); delayFbLPR.reset();
-    delayTimeSmoothL.reset (sampleRate, 0.05);
-    delayTimeSmoothR.reset (sampleRate, 0.05);
-    lfoPhase = 0.0f;
-
-    // ── Reverb ───────────────────────────────────────────────────────────
-    juce::dsp::ProcessSpec stereoSpec { sampleRate, (juce::uint32) samplesPerBlock, 2 };
-    reverb.prepare (stereoSpec); reverb.reset();
-    int maxPreDly = (int) (0.1 * sampleRate) + 1;
-    preDelayL.prepare (monoSpec); preDelayL.setMaximumDelayInSamples (maxPreDly);
-    preDelayR.prepare (monoSpec); preDelayR.setMaximumDelayInSamples (maxPreDly);
-    float initHC = 16000.0f - 0.5f * 8000.0f;
-    reverbHCL.setCutoff (initHC, sr); reverbHCL.reset();
-    reverbHCR.setCutoff (initHC, sr); reverbHCR.reset();
-    prevReverbRoom = -1.0f;
-    prevReverbDamp = -1.0f;
-
-    // ── Bypass crossfade ─────────────────────────────────────────────────
-    distBypassGain.reset  (sampleRate, 0.01);
-    delayBypassGain.reset (sampleRate, 0.01);
-    reverbBypassGain.reset(sampleRate, 0.01);
-    distBypassGain.setCurrentAndTargetValue  (1.0f);
-    delayBypassGain.setCurrentAndTargetValue (1.0f);
-    reverbBypassGain.setCurrentAndTargetValue(1.0f);
-
-    tempBuffer.setSize (2, samplesPerBlock);
-}
-
-void NewProjectAudioProcessor::syncDSPToParameters() { /* read live in processBlock */ }
-
-void NewProjectAudioProcessor::releaseResources()
-{
-    delayL.reset();       delayR.reset();
-    preDelayL.reset();    preDelayR.reset();
-    reverb.reset();
-    preHPL.reset();       preHPR.reset();
-    bassEqL.reset();      bassEqR.reset();
-    midEqL.reset();       midEqR.reset();
-    trebleEqL.reset();    trebleEqR.reset();
-    cabHPL.reset();       cabHPR.reset();
-    cabResoL.reset();     cabResoR.reset();
-    cabBoxL.reset();      cabBoxR.reset();
-    cabPresL.reset();     cabPresR.reset();
-    cabNotchL.reset();    cabNotchR.reset();
-    cabLPL.reset();       cabLPR.reset();
-    cabLP2L.reset();      cabLP2R.reset();
-    delayFbLPL.reset();   delayFbLPR.reset();
-    reverbHCL.reset();    reverbHCR.reset();
-    gateL.reset();        gateR.reset();
-}
-
-//==============================================================================
-bool NewProjectAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
-{
-    const auto& mainOut = layouts.getMainOutputChannelSet();
-    const auto& mainIn  = layouts.getMainInputChannelSet();
-    if (mainOut != juce::AudioChannelSet::stereo()) return false;
-    return mainIn == juce::AudioChannelSet::stereo()
-        || mainIn == juce::AudioChannelSet::mono();
-}
-
-//==============================================================================
-//  MAIN AUDIO PROCESSING
-//==============================================================================
-void NewProjectAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
-                                             juce::MidiBuffer& /*midi*/)
+void ForgeAmpProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
-    const int numSamples = buffer.getNumSamples();
 
-    // Mono -> stereo
-    if (getTotalNumInputChannels() < 2 && buffer.getNumChannels() >= 2)
-        buffer.copyFrom (1, 0, buffer, 0, 0, numSamples);
+    const int numIn  = getTotalNumInputChannels();
+    const int numOut = getTotalNumOutputChannels();
+    const int n = buffer.getNumSamples();
 
-    auto* L = buffer.getWritePointer (0);
-    auto* R = buffer.getWritePointer (1);
+    for (int ch = numIn; ch < numOut; ++ch)
+        buffer.clear (ch, 0, n);
 
-    // ── Read bypass flags ────────────────────────────────────────────────
-    const bool distortionOn = *apvts.getRawParameterValue ("distortionOn") >= 0.5f;
-    const bool delayOn      = *apvts.getRawParameterValue ("delayOn")      >= 0.5f;
-    const bool reverbOn     = *apvts.getRawParameterValue ("reverbOn")     >= 0.5f;
+    if (n <= 0 || oversampler == nullptr || buffer.getNumChannels() < 2)
+        return;
 
-    // ── Read all parameters ──────────────────────────────────────────────
-    const float distDrive   = apvts.getRawParameterValue ("distDrive")->load();
-    const float distBass    = apvts.getRawParameterValue ("distBass")->load();
-    const float distMid     = apvts.getRawParameterValue ("distMid")->load();
-    const float distTreble  = apvts.getRawParameterValue ("distTreble")->load();
-    const float distGate    = apvts.getRawParameterValue ("distGate")->load();
-    const float level       = apvts.getRawParameterValue ("level")->load();
-    const float delayTimeMs = apvts.getRawParameterValue ("delayTime")->load();
-    const float feedback    = apvts.getRawParameterValue ("delayFeedback")->load();
-    const float delayTone   = apvts.getRawParameterValue ("delayTone")->load();
-    const float delayMix    = apvts.getRawParameterValue ("delayMix")->load();
-    const float reverbRoom  = apvts.getRawParameterValue ("reverbRoom")->load();
-    const float reverbPreDly= apvts.getRawParameterValue ("reverbPreDelay")->load();
-    const float reverbDamp  = apvts.getRawParameterValue ("reverbDamp")->load();
-    const float reverbMix   = apvts.getRawParameterValue ("reverbMix")->load();
+    if (auto* host = getPlayHead())
+        if (const auto pos = host->getPosition())
+            if (const auto hostBpm = pos->getBpm())
+                if (*hostBpm > 1.0)
+                    bpm.store (*hostBpm);
 
-    const float sr = (float) currentSampleRate;
+    updateParameters();
 
-    // ── Bypass crossfade targets ─────────────────────────────────────────
-    distBypassGain.setTargetValue  (distortionOn ? 1.0f : 0.0f);
-    delayBypassGain.setTargetValue (delayOn      ? 1.0f : 0.0f);
-    reverbBypassGain.setTargetValue(reverbOn     ? 1.0f : 0.0f);
-
-    //======================================================================
-    //  1. DISTORTION — Neural Amp Modeler (Mesa Boogie neural inference)
-    //
-    //     NoiseGate → PreHP(80Hz) → Drive Gain →
-    //     NAM Neural Inference (mono, process L+R separately) →
-    //     Bass Shelf(200Hz) → Mid Peak(800Hz) → Treble Shelf(3.5kHz) →
-    //     Cabinet Sim (SM57/4x12/V30) → Level
-    //======================================================================
-    if (distortionOn || distBypassGain.isSmoothing())
+    if (firstBlock)
     {
-        // Save dry for bypass crossfade
-        tempBuffer.copyFrom (0, 0, buffer, 0, 0, numSamples);
-        tempBuffer.copyFrom (1, 0, buffer, 1, 0, numSamples);
+        // Start exactly where the parameters are instead of gliding in from defaults.
+        for (auto* s : { &sGain, &sBass, &sMid, &sTreble, &sPresence, &sDepth, &sMaster,
+                         &sBoostDrive, &sBoostTone, &sBoostLevel,
+                         &inGain, &outGain, &boostMix, &ampMix, &cabMix })
+            s->setCurrentAndTargetValue (s->getTargetValue());
 
-        // Configure noise gate
-        gateL.setThreshold (distGate);
-        gateR.setThreshold (distGate);
+        amp.setVoice (pendingAmpModel);
+        cab.setModel (pendingCabModel);
+        ampSwitch.reset();
+        cabSwitch.reset();
+        delay.reset();
+        reverb.reset();
+        firstBlock = false;
+    }
 
-        // Configure tone stack: 0-1 -> -12..+12 dB
-        const float bassDb   = (distBass   - 0.5f) * 24.0f;
-        const float midDb    = (distMid    - 0.5f) * 24.0f;
-        const float trebleDb = (distTreble - 0.5f) * 24.0f;
-        bassEqL.setLowShelf  (200.0f,  bassDb,   sr);
-        bassEqR.setLowShelf  (200.0f,  bassDb,   sr);
-        midEqL.setPeakEQ     (800.0f,  0.7f, midDb, sr);
-        midEqR.setPeakEQ     (800.0f,  0.7f, midDb, sr);
-        trebleEqL.setHighShelf(3500.0f, trebleDb, sr);
-        trebleEqR.setHighShelf(3500.0f, trebleDb, sr);
+    // Hosts may send more samples than promised in prepareToPlay; never overrun.
+    for (int start = 0; start < n; start += maxBlock)
+        processChunk (buffer, start, std::min (maxBlock, n - start), numIn >= 2);
+}
 
-        // ─── Drive gain: 0-1 -> -12..+12 dB input boost into NAM ────────
-        const float driveDb = (distDrive - 0.5f) * 24.0f;
-        const float driveGain = std::pow (10.0f, driveDb / 20.0f);
+void ForgeAmpProcessor::processChunk (juce::AudioBuffer<float>& buffer, int start, int n, bool stereoIn)
+{
+    float* L = buffer.getWritePointer (0, start);
+    float* R = buffer.getWritePointer (1, start);
+    float* mono = monoBuffer.getWritePointer (0);
 
-        // ─── Noise Gate ─────────────────────────────────────────────────
-        for (int i = 0; i < numSamples; ++i)
+    // ── 1. Mono guitar signal, input gain, gate ───────────────────────────────
+    for (int i = 0; i < n; ++i)
+        mono[i] = (stereoIn ? 0.5f * (L[i] + R[i]) : L[i]) * inGain.getNextValue();
+
+    inputMeter.push (mono, n);
+    gate.process (mono, n);
+    gateGainForUi.store (gate.getGain(), std::memory_order_relaxed);
+
+    // ── 2. Boost + amp, 4x oversampled ────────────────────────────────────────
+    float* chans[] = { mono };
+    juce::dsp::AudioBlock<float> block (chans, 1, (size_t) n);
+    auto os = oversampler->processSamplesUp (block);
+    float* x = os.getChannelPointer (0);
+    const int osN = (int) os.getNumSamples();
+
+    for (int i0 = 0; i0 < osN; i0 += kControlInterval)
+    {
+        const int m = std::min (kControlInterval, osN - i0);
+
+        const AmpEngine::Controls c { sGain.getNextValue(), sBass.getNextValue(), sMid.getNextValue(),
+                                      sTreble.getNextValue(), sPresence.getNextValue(),
+                                      sDepth.getNextValue(), sMaster.getNextValue() };
+        amp.setControls (c);
+
+        const float bd = sBoostDrive.getNextValue(), bt = sBoostTone.getNextValue(), bl = sBoostLevel.getNextValue();
+        if (bd != lastBoost[0] || bt != lastBoost[1] || bl != lastBoost[2])
         {
-            L[i] = gateL.process (L[i]);
-            R[i] = gateR.process (R[i]);
+            boost.setControls (bd, bt, bl);
+            lastBoost[0] = bd; lastBoost[1] = bt; lastBoost[2] = bl;
         }
 
-        // ─── Pre-NAM HP (80 Hz) ────────────────────────────────────────
-        for (int i = 0; i < numSamples; ++i)
+        for (int i = i0; i < i0 + m; ++i)
         {
-            L[i] = preHPL.process (L[i]);
-            R[i] = preHPR.process (R[i]);
+            double s = x[i];
+
+            const float bm = boostMix.getNextValue();
+            if (bm > 0.0f)
+                s += bm * (boost.process (s) - s);
+
+            bool swapNow = false;
+            const float fade = ampSwitch.next (swapNow);
+            if (swapNow)
+                amp.setVoice (pendingAmpModel);
+
+            const float am = ampMix.getNextValue();
+            if (am > 0.0f)
+                s += am * (amp.process (s) * fade - s);
+
+            x[i] = (float) s;
+        }
+    }
+
+    oversampler->processSamplesDown (block);
+
+    // ── 3. Cabinet ────────────────────────────────────────────────────────────
+    if (cabMix.getTargetValue() > 0.0f || cabMix.isSmoothing())
+    {
+        float* dry  = dryBuffer.getWritePointer (0);
+        float* fade = dryBuffer.getWritePointer (1);
+        std::copy (mono, mono + n, dry);
+
+        // Split the block where a model swap happens so the old model fades out and the
+        // new one fades in.
+        for (int i = 0; i < n;)
+        {
+            int j = i;
+            bool swap = false;
+            while (j < n && ! swap)
+                fade[j++] = cabSwitch.next (swap);
+
+            cab.process (mono + i, j - i);
+            if (swap)
+                cab.setModel (pendingCabModel);
+            i = j;
         }
 
-        // ─── Apply drive gain ──────────────────────────────────────────
-        for (int i = 0; i < numSamples; ++i)
+        for (int i = 0; i < n; ++i)
         {
-            L[i] *= driveGain;
-            R[i] *= driveGain;
-        }
-
-        // ─── NAM Neural Inference (or fallback distortion) ──────────────
-        {
-            bool namProcessed = false;
-
-            // Try NAM first
-            const juce::SpinLock::ScopedTryLockType lock (namModelLock);
-            if (lock.isLocked() && namModel)
-            {
-                try
-                {
-                    // Ensure buffers are large enough
-                    if ((int) namInputBuffer.size() < numSamples)
-                    {
-                        namInputBuffer.resize ((size_t) numSamples);
-                        namOutputBuffer.resize ((size_t) numSamples);
-                    }
-
-                    // Mix L+R to mono
-                    for (int i = 0; i < numSamples; ++i)
-                        namInputBuffer[(size_t)i] = (double) (L[i] + R[i]) * 0.5;
-
-                    double* inPtr  = namInputBuffer.data();
-                    double* outPtr = namOutputBuffer.data();
-                    double* inPtrs[1]  = { inPtr };
-                    double* outPtrs[1] = { outPtr };
-                    namModel->process (inPtrs, outPtrs, numSamples);
-
-                    // Write mono result back to both channels
-                    for (int i = 0; i < numSamples; ++i)
-                    {
-                        float out = (float) namOutputBuffer[(size_t)i];
-                        L[i] = out;
-                        R[i] = out;
-                    }
-                    namProcessed = true;
-                }
-                catch (...)
-                {
-                    DBG ("NAM process() threw an exception!");
-                    namProcessed = false;
-                }
-            }
-
-            // ── Fallback: high-gain distortion if NAM not available ─────
-            // Uses atan waveshaper with aggressive gain so the user hears
-            // that the signal chain is working even without a .nam model.
-            if (!namProcessed)
-            {
-                // Map drive 0-1 to gain 1-100 (aggressive)
-                const float fallbackGain = 1.0f + distDrive * 99.0f;
-                for (int i = 0; i < numSamples; ++i)
-                {
-                    L[i] = std::atan (L[i] * fallbackGain) * (2.0f / juce::MathConstants<float>::pi);
-                    R[i] = std::atan (R[i] * fallbackGain) * (2.0f / juce::MathConstants<float>::pi);
-                }
-            }
-
-            namIsProcessing.store (namProcessed, std::memory_order_relaxed);
-        }
-
-        // ─── Post-NAM 3-band tone stack ─────────────────────────────────
-        for (int i = 0; i < numSamples; ++i)
-        {
-            L[i] = bassEqL.process (L[i]);
-            R[i] = bassEqR.process (R[i]);
-        }
-        for (int i = 0; i < numSamples; ++i)
-        {
-            L[i] = midEqL.process (L[i]);
-            R[i] = midEqR.process (R[i]);
-        }
-        for (int i = 0; i < numSamples; ++i)
-        {
-            L[i] = trebleEqL.process (L[i]);
-            R[i] = trebleEqR.process (R[i]);
-        }
-
-        // ─── Cabinet simulation (SM57 on 4x12 V30) ────────────────────
-        for (int i = 0; i < numSamples; ++i)
-        {
-            L[i] = cabHPL.process (L[i]);
-            R[i] = cabHPR.process (R[i]);
-        }
-        for (int i = 0; i < numSamples; ++i)
-        {
-            L[i] = cabResoL.process (L[i]);
-            R[i] = cabResoR.process (R[i]);
-        }
-        for (int i = 0; i < numSamples; ++i)
-        {
-            L[i] = cabBoxL.process (L[i]);
-            R[i] = cabBoxR.process (R[i]);
-        }
-        for (int i = 0; i < numSamples; ++i)
-        {
-            L[i] = cabPresL.process (L[i]);
-            R[i] = cabPresR.process (R[i]);
-        }
-        for (int i = 0; i < numSamples; ++i)
-        {
-            L[i] = cabNotchL.process (L[i]);
-            R[i] = cabNotchR.process (R[i]);
-        }
-        for (int i = 0; i < numSamples; ++i)
-        {
-            L[i] = cabLPL.process (L[i]);
-            R[i] = cabLPR.process (R[i]);
-        }
-        for (int i = 0; i < numSamples; ++i)
-        {
-            L[i] = cabLP2L.process (L[i]);
-            R[i] = cabLP2R.process (R[i]);
-        }
-
-        // ─── Level (smoothed) ───────────────────────────────────────────
-        levelSmoothed.setTargetValue (level);
-        for (int i = 0; i < numSamples; ++i)
-        {
-            const float g = levelSmoothed.getNextValue();
-            L[i] *= g;
-            R[i] *= g;
-        }
-
-        // ─── Bypass crossfade ───────────────────────────────────────────
-        for (int i = 0; i < numSamples; ++i)
-        {
-            const float g = distBypassGain.getNextValue();
-            L[i] = tempBuffer.getSample (0, i) * (1.0f - g) + L[i] * g;
-            R[i] = tempBuffer.getSample (1, i) * (1.0f - g) + R[i] * g;
+            const float cm = cabMix.getNextValue();
+            mono[i] = dry[i] + cm * (mono[i] * fade[i] - dry[i]);
         }
     }
     else
     {
-        levelSmoothed.skip (numSamples);
-        distBypassGain.skip (numSamples);
+        cabMix.skip (n);
     }
 
-    //======================================================================
-    //  2. DELAY — stereo offset + LFO modulation + feedback LP
-    //======================================================================
-    if (delayOn || delayBypassGain.isSmoothing())
+    // ── 4. Stereo effects ─────────────────────────────────────────────────────
+    std::copy (mono, mono + n, L);
+    std::copy (mono, mono + n, R);
+    delay.process (L, R, n);
+    reverb.process (L, R, n);
+
+    // ── 5. Output ─────────────────────────────────────────────────────────────
+    for (int i = 0; i < n; ++i)
     {
-        tempBuffer.copyFrom (0, 0, buffer, 0, 0, numSamples);
-        tempBuffer.copyFrom (1, 0, buffer, 1, 0, numSamples);
-
-        delayFbLPL.setCutoff (delayTone, sr);
-        delayFbLPR.setCutoff (delayTone, sr);
-
-        const float dtBaseSmp = delayTimeMs * 0.001f * sr;
-        delayTimeSmoothL.setTargetValue (dtBaseSmp);
-        delayTimeSmoothR.setTargetValue (dtBaseSmp * kStereoOffsetRatio);
-
-        const float lfoInc    = kLfoRateHz / sr;
-        const float lfoDepSmp = kLfoDepthMs * 0.001f * sr;
-        const float dMixWet = std::sin (delayMix * juce::MathConstants<float>::halfPi);
-        const float dMixDry = std::cos (delayMix * juce::MathConstants<float>::halfPi);
-
-        for (int i = 0; i < numSamples; ++i)
-        {
-            const float lfoVal = std::sin (juce::MathConstants<float>::twoPi * lfoPhase);
-            lfoPhase += lfoInc;
-            if (lfoPhase >= 1.0f) lfoPhase -= 1.0f;
-            const float modSmp = lfoVal * lfoDepSmp;
-
-            float dtL = juce::jmax (1.0f, delayTimeSmoothL.getNextValue() + modSmp);
-            float dtR = juce::jmax (1.0f, delayTimeSmoothR.getNextValue() + modSmp);
-            delayL.setDelay (dtL);
-            delayR.setDelay (dtR);
-
-            const float dryL = L[i], dryR = R[i];
-            const float wetL = delayL.popSample (0);
-            const float wetR = delayR.popSample (0);
-
-            const float fbL = delayFbLPL.process (wetL);
-            const float fbR = delayFbLPR.process (wetR);
-            delayL.pushSample (0, dryL + fbL * feedback);
-            delayR.pushSample (0, dryR + fbR * feedback);
-
-            L[i] = dryL * dMixDry + wetL * dMixWet;
-            R[i] = dryR * dMixDry + wetR * dMixWet;
-        }
-
-        for (int i = 0; i < numSamples; ++i)
-        {
-            const float g = delayBypassGain.getNextValue();
-            L[i] = tempBuffer.getSample (0, i) * (1.0f - g) + L[i] * g;
-            R[i] = tempBuffer.getSample (1, i) * (1.0f - g) + R[i] * g;
-        }
-    }
-    else
-    {
-        delayTimeSmoothL.skip (numSamples);
-        delayTimeSmoothR.skip (numSamples);
-        delayBypassGain.skip  (numSamples);
+        const float g = outGain.getNextValue();
+        L[i] *= g;
+        R[i] *= g;
     }
 
-    //======================================================================
-    //  3. REVERB — pre-delay + Freeverb + high-cut + crossfade
-    //======================================================================
-    if (reverbOn || reverbBypassGain.isSmoothing())
-    {
-        tempBuffer.copyFrom (0, 0, buffer, 0, 0, numSamples);
-        tempBuffer.copyFrom (1, 0, buffer, 1, 0, numSamples);
-
-        const float preDelaySmp = juce::jmax (0.0f, reverbPreDly * 0.001f * sr);
-        preDelayL.setDelay (preDelaySmp);
-        preDelayR.setDelay (preDelaySmp);
-
-        for (int i = 0; i < numSamples; ++i)
-        {
-            const float inL = L[i], inR = R[i];
-            L[i] = preDelayL.popSample (0);
-            R[i] = preDelayR.popSample (0);
-            preDelayL.pushSample (0, inL);
-            preDelayR.pushSample (0, inR);
-        }
-
-        if (reverbRoom != prevReverbRoom || reverbDamp != prevReverbDamp)
-        {
-            juce::dsp::Reverb::Parameters rp;
-            rp.roomSize = reverbRoom; rp.damping = reverbDamp;
-            rp.wetLevel = 1.0f; rp.dryLevel = 0.0f;
-            rp.width = 0.8f; rp.freezeMode = 0.0f;
-            reverb.setParameters (rp);
-            prevReverbRoom = reverbRoom;
-            prevReverbDamp = reverbDamp;
-            const float hcFreq = 16000.0f - reverbDamp * 8000.0f;
-            reverbHCL.setCutoff (hcFreq, sr);
-            reverbHCR.setCutoff (hcFreq, sr);
-        }
-
-        juce::dsp::AudioBlock<float> reverbBlock (buffer);
-        reverb.process (juce::dsp::ProcessContextReplacing<float> (reverbBlock));
-
-        for (int i = 0; i < numSamples; ++i)
-        {
-            L[i] = reverbHCL.process (L[i]);
-            R[i] = reverbHCR.process (R[i]);
-        }
-
-        const float rMixWet = std::sin (reverbMix * juce::MathConstants<float>::halfPi);
-        const float rMixDry = std::cos (reverbMix * juce::MathConstants<float>::halfPi);
-
-        for (int i = 0; i < numSamples; ++i)
-        {
-            L[i] = tempBuffer.getSample (0, i) * rMixDry + L[i] * rMixWet;
-            R[i] = tempBuffer.getSample (1, i) * rMixDry + R[i] * rMixWet;
-        }
-
-        for (int i = 0; i < numSamples; ++i)
-        {
-            const float g = reverbBypassGain.getNextValue();
-            L[i] = tempBuffer.getSample (0, i) * (1.0f - g) + L[i] * g;
-            R[i] = tempBuffer.getSample (1, i) * (1.0f - g) + R[i] * g;
-        }
-    }
-    else
-    {
-        reverbBypassGain.skip (numSamples);
-    }
+    outputMeter.push (L, n);
+    outputMeter.push (R, n);
 }
 
 //==============================================================================
-void NewProjectAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
+juce::String ForgeAmpProcessor::loadUserImpulseResponse (const juce::File& file, bool selectUserIrModel)
+{
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
+
+    if (reader == nullptr)
+        return "Couldn't read \"" + file.getFileName() + "\". Use a WAV or AIFF impulse response.";
+
+    if (reader->sampleRate <= 0.0 || reader->lengthInSamples <= 0 || reader->numChannels == 0)
+        return "\"" + file.getFileName() + "\" is empty.";
+
+    const int maxLen = (int) std::min<juce::int64> (reader->lengthInSamples, (juce::int64) (reader->sampleRate * 2.0));
+    juce::AudioBuffer<float> raw ((int) reader->numChannels, maxLen);
+    reader->read (&raw, 0, maxLen, 0, true, true);
+
+    // Cab IRs are mono; fold stereo IRs down.
+    juce::AudioBuffer<float> ir (1, maxLen);
+    ir.clear();
+    for (int ch = 0; ch < raw.getNumChannels(); ++ch)
+        ir.addFrom (0, 0, raw, ch, 0, maxLen, 1.0f / (float) raw.getNumChannels());
+
+    const float peak = ir.getMagnitude (0, 0, maxLen);
+    if (peak < 1.0e-6f)
+        return "\"" + file.getFileName() + "\" is silent.";
+
+    // Trim leading silence (some IR packs add pre-delay) and the inaudible tail.
+    int first = 0;
+    while (first < maxLen && std::abs (ir.getSample (0, first)) < peak * 0.01f)
+        ++first;
+    first = std::max (0, first - 8);
+    int last = maxLen - 1;
+    while (last > first && std::abs (ir.getSample (0, last)) < peak * 1.0e-4f)
+        --last;
+
+    const int len = last - first + 1;
+    juce::AudioBuffer<float> trimmed (1, len);
+    trimmed.copyFrom (0, 0, ir, 0, first, len);
+
+    // Magnitude response via FFT, used for loudness matching and for the UI curve.
+    int order = 12;
+    while ((1 << order) < len && order < 18)
+        ++order;
+    const int fftSize = 1 << order;
+    juce::dsp::FFT fft (order);
+    std::vector<float> spec ((size_t) fftSize * 2, 0.0f);
+    std::copy (trimmed.getReadPointer (0), trimmed.getReadPointer (0) + std::min (len, fftSize), spec.begin());
+    fft.performFrequencyOnlyForwardTransform (spec.data());
+
+    const double irRate = reader->sampleRate;
+    auto magAt = [&] (double f)
+    {
+        const double bin = std::clamp (f / irRate * fftSize, 0.0, fftSize * 0.5 - 1.0);
+        const int b = (int) bin;
+        const double t = bin - b;
+        return (double) spec[(size_t) b] * (1.0 - t) + (double) spec[(size_t) b + 1] * t;
+    };
+
+    // Match the built-in cabs: the 200 Hz - 4 kHz band averages 0 dB.
+    double sumDb = 0.0;
+    int count = 0;
+    for (double f = 200.0; f <= 4000.0; f *= 1.05, ++count)
+        sumDb += gainToDb (magAt (f));
+    const double normDb = -sumDb / std::max (1, count);
+    trimmed.applyGain ((float) dbToGain (normDb));
+
+    std::vector<float> response ((size_t) kResponsePoints);
+    for (int i = 0; i < kResponsePoints; ++i)
+    {
+        const double f = kResponseMinHz * std::pow (kResponseMaxHz / kResponseMinHz, (double) i / (kResponsePoints - 1));
+        response[(size_t) i] = f < irRate * 0.5 ? (float) (gainToDb (magAt (f)) + normDb) : -60.0f;
+    }
+
+    {
+        const juce::SpinLock::ScopedLockType lock (userIrLock);
+        userIrResponse = std::move (response);
+        userIrFile = file;
+    }
+
+    cab.loadImpulseResponse (std::move (trimmed), irRate);
+    userIrLoaded = true;
+
+    if (selectUserIrModel)
+        if (auto* param = apvts.getParameter (ids::cabModel))
+            param->setValueNotifyingHost (param->convertTo0to1 ((float) CabSim::kUserIR));
+
+    return {};
+}
+
+void ForgeAmpProcessor::clearUserImpulseResponse()
+{
+    userIrLoaded = false;
+    {
+        const juce::SpinLock::ScopedLockType lock (userIrLock);
+        userIrResponse.clear();
+        userIrFile = juce::File();
+    }
+
+    if (auto* param = apvts.getParameter (ids::cabModel))
+        if ((int) param->convertFrom0to1 (param->getValue()) == CabSim::kUserIR)
+            param->setValueNotifyingHost (param->convertTo0to1 (0.0f));
+}
+
+juce::File ForgeAmpProcessor::getUserImpulseResponseFile() const
+{
+    const juce::SpinLock::ScopedLockType lock (userIrLock);
+    return userIrFile;
+}
+
+std::vector<float> ForgeAmpProcessor::getUserIrResponse() const
+{
+    const juce::SpinLock::ScopedLockType lock (userIrLock);
+    return userIrResponse;
+}
+
+//==============================================================================
+void ForgeAmpProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     auto state = apvts.copyState();
-    std::unique_ptr<juce::XmlElement> xml (state.createXml());
-    copyXmlToBinary (*xml, destData);
+    presets->writeState (state);
+    state.setProperty ("userIR", userIrLoaded.load() ? getUserImpulseResponseFile().getFullPathName() : juce::String(), nullptr);
+    state.setProperty ("uiScale", uiScale, nullptr);
+    state.setProperty ("uiPage", uiPage, nullptr);
+    state.setProperty ("pluginVersion", info::version, nullptr);
+
+    if (auto xml = state.createXml())
+        copyXmlToBinary (*xml, destData);
 }
 
-void NewProjectAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
+void ForgeAmpProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
-    std::unique_ptr<juce::XmlElement> xmlState (getXmlFromBinary (data, sizeInBytes));
-    if (xmlState != nullptr && xmlState->hasTagName (apvts.state.getType()))
-        apvts.replaceState (juce::ValueTree::fromXml (*xmlState));
+    auto xml = getXmlFromBinary (data, sizeInBytes);
+    if (xml == nullptr || ! xml->hasTagName (apvts.state.getType()))
+        return;
+
+    const auto tree = juce::ValueTree::fromXml (*xml);
+    apvts.replaceState (tree);
+
+    uiScale = juce::jlimit (1.0f, 4.0f, (float) tree.getProperty ("uiScale", 2.0f));
+    uiPage  = juce::jlimit (0, 3, (int) tree.getProperty ("uiPage", 1));
+
+    const auto irPath = tree.getProperty ("userIR").toString();
+    if (irPath.isNotEmpty() && juce::File (irPath).existsAsFile())
+        loadUserImpulseResponse (juce::File (irPath), false);
+
+    // Hosts may restore state from any thread; the preset manager belongs to the UI thread.
+    if (juce::MessageManager::existsAndIsCurrentThread())
+    {
+        presets->readState (tree);
+    }
+    else
+    {
+        juce::WeakReference<ForgeAmpProcessor> weakThis (this);
+        juce::MessageManager::callAsync ([weakThis, tree]
+        {
+            if (weakThis != nullptr)
+                weakThis->presets->readState (tree);
+        });
+    }
 }
 
 //==============================================================================
-bool NewProjectAudioProcessor::hasEditor() const { return true; }
-juce::AudioProcessorEditor* NewProjectAudioProcessor::createEditor()
+juce::AudioProcessorEditor* ForgeAmpProcessor::createEditor()
 {
-    return new NewProjectAudioProcessorEditor (*this);
+    return new ForgeAmpEditor (*this);
 }
+
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
-    return new NewProjectAudioProcessor();
+    return new ForgeAmpProcessor();
 }

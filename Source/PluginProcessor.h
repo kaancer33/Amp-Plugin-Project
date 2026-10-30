@@ -1,281 +1,135 @@
 #pragma once
 #include <JuceHeader.h>
-#include <memory>
+#include "Parameters.h"
+#include "PresetManager.h"
+#include "dsp/AmpEngine.h"
+#include "dsp/Pedals.h"
+#include "dsp/CabSim.h"
+#include "dsp/StereoDelay.h"
+#include "dsp/FdnReverb.h"
 
-// Forward declaration — NAM core
-namespace nam { class DSP; }
+/** Signal flow (the guitar chain is mono, like a real rig; the effects are stereo):
 
-class NewProjectAudioProcessor : public juce::AudioProcessor
+      input gain -> gate -> [4x oversampled: boost -> preamp -> tone stack -> power amp]
+                 -> cab (built-in model or IR) -> delay -> reverb -> output gain
+*/
+class ForgeAmpProcessor : public juce::AudioProcessor
 {
 public:
-    NewProjectAudioProcessor();
-    ~NewProjectAudioProcessor() override;
+    ForgeAmpProcessor();
+    ~ForgeAmpProcessor() override;
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    using AudioProcessor::processBlock;
 
     juce::AudioProcessorEditor* createEditor() override;
-    bool hasEditor() const override;
+    bool hasEditor() const override { return true; }
 
-    const juce::String getName() const override;
-    bool acceptsMidi() const override;
-    bool producesMidi() const override;
-    bool isMidiEffect() const override;
-    double getTailLengthSeconds() const override;
+    const juce::String getName() const override { return forge::info::productName; }
+    bool acceptsMidi() const override  { return false; }
+    bool producesMidi() const override { return false; }
+    bool isMidiEffect() const override { return false; }
+    double getTailLengthSeconds() const override { return 14.0; }
 
-    int getNumPrograms() override;
-    int getCurrentProgram() override;
-    void setCurrentProgram (int index) override;
-    const juce::String getProgramName (int index) override;
-    void changeProgramName (int index, const juce::String& newName) override;
+    // Presets are handled by the plugin's own browser. Exposing them as host programs makes
+    // some hosts call setCurrentProgram(0) after restoring a session, which would wipe it.
+    int getNumPrograms() override                               { return 1; }
+    int getCurrentProgram() override                            { return 0; }
+    void setCurrentProgram (int) override                       {}
+    const juce::String getProgramName (int) override            { return {}; }
+    void changeProgramName (int, const juce::String&) override  {}
 
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
+    //==============================================================================
     juce::AudioProcessorValueTreeState apvts;
-    static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+    forge::PresetManager& getPresetManager() noexcept { return *presets; }
 
-    void syncDSPToParameters();
+    forge::LevelMeter inputMeter, outputMeter;
+    float getGateGain() const noexcept { return gateGainForUi.load (std::memory_order_relaxed); }
+    double getBpm() const noexcept     { return bpm.load (std::memory_order_relaxed); }
 
-    // ── NAM Model Loading ────────────────────────────────────────────────
-    void loadNAMModel (const juce::File& namFile);
-    bool isModelLoaded() const { return namModel != nullptr; }
-    juce::String getModelName() const { return currentModelName; }
+    /** Loads a .wav/.aif impulse response and switches the cab to "User IR".
+        Message thread only. Returns an error message, or an empty string on success. */
+    juce::String loadUserImpulseResponse (const juce::File& file, bool selectUserIrModel = true);
+    void clearUserImpulseResponse();
+    juce::File getUserImpulseResponseFile() const;
+    bool hasUserImpulseResponse() const noexcept { return userIrLoaded.load(); }
 
-    // ── NAM runtime diagnostics ─────────────────────────────────────────
-    // True if NAM process() ran successfully on the last audio block
-    std::atomic<bool> namIsProcessing { false };
-    // Debug info string (set during loadNAMModel)
-    juce::String lastLoadError;
+    /** The user IR's magnitude response in dB at log-spaced frequencies, for the UI. */
+    std::vector<float> getUserIrResponse() const;
+    static constexpr float kResponseMinHz = 20.0f, kResponseMaxHz = 20000.0f;
+    static constexpr int   kResponsePoints = 256;
 
-    // ── NAM Model Directory Management ───────────────────────────────────
-    juce::File getModelsDirectory() const;
-    juce::StringArray getAvailableModelNames() const;
-    void loadModelByName (const juce::String& name);
-    void importNAMModel (const juce::File& sourceFile);
-    int  getCurrentModelIndex() const;
+    /** Editor zoom (window width / 512 art pixels) and last page, remembered with the session. */
+    float uiScale = 2.0f;
+    int uiPage = 1;
 
 private:
-    // ====================================================================
-    //  DSP primitives — all RT-safe, zero heap allocation
-    // ====================================================================
+    void cacheParameterPointers();
+    void updateParameters();
+    void processChunk (juce::AudioBuffer<float>& buffer, int start, int n, bool stereoInput);
 
-    // ── 1-pole LP ──────────────────────────────────────────────────────
-    struct OnePoleLP
+    std::unique_ptr<forge::PresetManager> presets;
+
+    struct Params
     {
-        float z1 = 0.0f, a = 1.0f, b = 0.0f;
-        void setCutoff (float freq, float sr)
-        {
-            b = std::exp (-juce::MathConstants<float>::twoPi * freq / sr);
-            a = 1.0f - b;
-        }
-        float process (float x) { return z1 = x * a + z1 * b; }
-        void reset() { z1 = 0.0f; }
-    };
+        std::atomic<float>* inputGain;
+        std::atomic<float>* outputGain;
+        std::atomic<float>* gateOn;   std::atomic<float>* gateThreshold; std::atomic<float>* gateRelease;
+        std::atomic<float>* boostOn;  std::atomic<float>* boostDrive; std::atomic<float>* boostTone; std::atomic<float>* boostLevel;
+        std::atomic<float>* ampOn;    std::atomic<float>* ampModel;
+        std::atomic<float>* ampGain;  std::atomic<float>* ampBass; std::atomic<float>* ampMid; std::atomic<float>* ampTreble;
+        std::atomic<float>* ampPresence; std::atomic<float>* ampDepth; std::atomic<float>* ampMaster;
+        std::atomic<float>* cabOn;    std::atomic<float>* cabModel; std::atomic<float>* cabMic;
+        std::atomic<float>* cabLowCut; std::atomic<float>* cabHighCut;
+        std::atomic<float>* delayOn;  std::atomic<float>* delaySync; std::atomic<float>* delayTime;
+        std::atomic<float>* delayDivision; std::atomic<float>* delayFeedback; std::atomic<float>* delayTone;
+        std::atomic<float>* delayMix; std::atomic<float>* delayPingPong;
+        std::atomic<float>* reverbOn; std::atomic<float>* reverbSize; std::atomic<float>* reverbDecay;
+        std::atomic<float>* reverbPreDelay; std::atomic<float>* reverbTone; std::atomic<float>* reverbMix;
+    } p {};
 
-    struct OnePoleHP
-    {
-        OnePoleLP lp;
-        void setCutoff (float freq, float sr) { lp.setCutoff (freq, sr); }
-        float process (float x) { return x - lp.process (x); }
-        void reset() { lp.reset(); }
-    };
+    // ── DSP ──────────────────────────────────────────────────────────────────
+    static constexpr int kOversamplingOrder = 2;    // 2^2 = 4x
+    static constexpr int kControlInterval   = 32;   // oversampled samples between control updates
 
-    // ── Biquad (TDF-II) ────────────────────────────────────────────────
-    struct Biquad
-    {
-        float b0 = 1.0f, b1 = 0.0f, b2 = 0.0f;
-        float a1 = 0.0f, a2 = 0.0f;
-        float z1 = 0.0f, z2 = 0.0f;
+    std::unique_ptr<juce::dsp::Oversampling<float>> oversampler;
+    forge::NoiseGate gate;
+    forge::Overdrive boost;
+    forge::AmpEngine amp;
+    forge::CabSim cab;
+    forge::StereoDelay delay;
+    forge::FdnReverb reverb;
 
-        void setPeakEQ (float freq, float Q, float gainDB, float sr)
-        {
-            const float A  = std::pow (10.0f, gainDB / 40.0f);
-            const float w0 = juce::MathConstants<float>::twoPi * freq / sr;
-            const float alpha = std::sin (w0) / (2.0f * Q);
-            const float cosW  = std::cos (w0);
-            const float a0inv = 1.0f / (1.0f + alpha / A);
-            b0 = (1.0f + alpha * A) * a0inv;
-            b1 = (-2.0f * cosW)     * a0inv;
-            b2 = (1.0f - alpha * A) * a0inv;
-            a1 = b1;
-            a2 = (1.0f - alpha / A) * a0inv;
-        }
-        void setLowShelf (float freq, float gainDB, float sr)
-        {
-            const float A    = std::pow (10.0f, gainDB / 40.0f);
-            const float w0   = juce::MathConstants<float>::twoPi * freq / sr;
-            const float sinW = std::sin (w0), cosW = std::cos (w0);
-            const float alpha = sinW * 0.5f * std::sqrt (2.0f);
-            const float tsa  = 2.0f * std::sqrt (A) * alpha;
-            const float a0inv = 1.0f / ((A+1) + (A-1)*cosW + tsa);
-            b0 = A * ((A+1) - (A-1)*cosW + tsa) * a0inv;
-            b1 = 2*A * ((A-1) - (A+1)*cosW)     * a0inv;
-            b2 = A * ((A+1) - (A-1)*cosW - tsa) * a0inv;
-            a1 = -2 * ((A-1) + (A+1)*cosW)      * a0inv;
-            a2 = ((A+1) + (A-1)*cosW - tsa)     * a0inv;
-        }
-        void setHighShelf (float freq, float gainDB, float sr)
-        {
-            const float A    = std::pow (10.0f, gainDB / 40.0f);
-            const float w0   = juce::MathConstants<float>::twoPi * freq / sr;
-            const float sinW = std::sin (w0), cosW = std::cos (w0);
-            const float alpha = sinW * 0.5f * std::sqrt (2.0f);
-            const float tsa  = 2.0f * std::sqrt (A) * alpha;
-            const float a0inv = 1.0f / ((A+1) - (A-1)*cosW + tsa);
-            b0 = A * ((A+1) + (A-1)*cosW + tsa)  * a0inv;
-            b1 = -2*A * ((A-1) + (A+1)*cosW)     * a0inv;
-            b2 = A * ((A+1) + (A-1)*cosW - tsa)  * a0inv;
-            a1 = 2 * ((A-1) - (A+1)*cosW)        * a0inv;
-            a2 = ((A+1) - (A-1)*cosW - tsa)      * a0inv;
-        }
-        void setHighPass (float freq, float sr, float Q = 0.7071f)
-        {
-            const float w0 = juce::MathConstants<float>::twoPi * freq / sr;
-            const float alpha = std::sin (w0) / (2.0f * Q);
-            const float cosW  = std::cos (w0);
-            const float a0inv = 1.0f / (1.0f + alpha);
-            b0 =  (1.0f + cosW) * 0.5f * a0inv;
-            b1 = -(1.0f + cosW)        * a0inv;
-            b2 =  (1.0f + cosW) * 0.5f * a0inv;
-            a1 = -2.0f * cosW          * a0inv;
-            a2 = (1.0f - alpha)        * a0inv;
-        }
-        void setLowPass (float freq, float sr, float Q = 0.7071f)
-        {
-            const float w0 = juce::MathConstants<float>::twoPi * freq / sr;
-            const float alpha = std::sin (w0) / (2.0f * Q);
-            const float cosW  = std::cos (w0);
-            const float a0inv = 1.0f / (1.0f + alpha);
-            b0 = (1.0f - cosW) * 0.5f * a0inv;
-            b1 = (1.0f - cosW)        * a0inv;
-            b2 = (1.0f - cosW) * 0.5f * a0inv;
-            a1 = -2.0f * cosW         * a0inv;
-            a2 = (1.0f - alpha)       * a0inv;
-        }
-        float process (float x)
-        {
-            float y = b0 * x + z1;
-            z1 = b1 * x - a1 * y + z2;
-            z2 = b2 * x - a2 * y;
-            return y;
-        }
-        void reset() { z1 = z2 = 0.0f; }
-    };
+    forge::SwitchFader ampSwitch, cabSwitch;
+    int pendingAmpModel = 1, pendingCabModel = 0;
 
-    // ── Noise Gate (exact ToobAmp state machine) ───────────────────────
-    struct NoiseGate
-    {
-        enum State { kDisabled, kReleased, kReleasing, kAttacking, kHolding };
-        State state = kReleased;
-        float gateGain = 0.0f;
-        float dx = 0.0f;
-        int   holdCount = 0;
-        float attackRate = 0.0f;
-        float releaseRate = 0.0f;
-        int   holdSamples = 0;
-        float attackThreshold = 0.001f;
-        float releaseThreshold = 0.00025f;
-        bool  enabled = true;
+    // Control-rate smoothed knobs (stepped once per kControlInterval oversampled samples).
+    juce::SmoothedValue<float> sGain, sBass, sMid, sTreble, sPresence, sDepth, sMaster;
+    juce::SmoothedValue<float> sBoostDrive, sBoostTone, sBoostLevel;
+    float lastBoost[3] { -1.0f, -1.0f, -1.0f };
+    // Per-sample smoothed gains and bypass cross-fades.
+    juce::SmoothedValue<float> inGain, outGain, boostMix, ampMix, cabMix;
 
-        void prepare (float sr)
-        {
-            attackRate  = 1.0f / (0.001f * sr);
-            releaseRate = 1.0f / (0.3f * sr);
-            holdSamples = (int)(0.2f * sr);
-        }
-        void setThreshold (float db)
-        {
-            float af = std::pow (10.0f, db / 20.0f);
-            attackThreshold  = af;
-            releaseThreshold = af * 0.25f;
-            enabled = (db > -79.0f);
-            if (!enabled) { state = kDisabled; gateGain = 1.0f; dx = 0.0f; }
-            else if (state == kDisabled) { state = kReleased; gateGain = 0.0f; dx = 0.0f; }
-        }
-        float process (float input)
-        {
-            if (state == kDisabled) return input;
-            float absVal = std::abs (input);
-            if (absVal > attackThreshold && state < kAttacking)
-            { state = kAttacking; dx = attackRate; holdCount = holdSamples; }
-            else if (absVal > releaseThreshold && state >= kAttacking)
-            { holdCount = holdSamples; }
-            if (holdCount > 0 && --holdCount == 0)
-            { state = kReleasing; dx = -releaseRate; }
-            gateGain += dx;
-            if (gateGain > 1.0f) { gateGain = 1.0f; dx = 0.0f; state = kHolding; }
-            else if (gateGain < 0.0f) { gateGain = 0.0f; dx = 0.0f; state = kReleased; }
-            return input * gateGain;
-        }
-        void reset()
-        {
-            gateGain = 0.0f; dx = 0.0f; holdCount = 0;
-            state = enabled ? kReleased : kDisabled;
-        }
-    };
+    juce::AudioBuffer<float> monoBuffer, dryBuffer;
+    double sampleRate = 48000.0;
+    int maxBlock = 512;
+    bool firstBlock = true;
 
-    // ====================================================================
-    //  Member variables
-    // ====================================================================
+    std::atomic<float> gateGainForUi { 0.0f };
+    std::atomic<double> bpm { 120.0 };
 
-    // ── Neural Amp Model (core inference engine) ─────────────────────
-    std::unique_ptr<nam::DSP> namModel;
-    juce::String currentModelName { "No Model" };
-    juce::SpinLock namModelLock;   // protects hot-swap
+    // ── User IR ──────────────────────────────────────────────────────────────
+    juce::File userIrFile;
+    std::atomic<bool> userIrLoaded { false };  // juce::dsp::Convolution keeps the IR across prepare()
+    std::vector<float> userIrResponse;
+    mutable juce::SpinLock userIrLock;
 
-    // ── NAM internal buffers (double precision — NAM expects double) ──
-    std::vector<double> namInputBuffer;
-    std::vector<double> namOutputBuffer;
-
-    // ── Noise gate ────────────────────────────────────────────────────
-    NoiseGate gateL, gateR;
-
-    // ── Pre-NAM input conditioning ───────────────────────────────────
-    OnePoleHP preHPL, preHPR;   // tighten low-end before neural net
-
-    // ── Post-NAM 3-band tone stack ───────────────────────────────────
-    Biquad bassEqL, bassEqR;
-    Biquad midEqL,  midEqR;
-    Biquad trebleEqL, trebleEqR;
-
-    // ── Cabinet simulation (SM57 on 4x12 V30) ───────────────────────
-    Biquad cabHPL,    cabHPR;
-    Biquad cabResoL,  cabResoR;
-    Biquad cabBoxL,   cabBoxR;
-    Biquad cabPresL,  cabPresR;
-    Biquad cabNotchL, cabNotchR;
-    Biquad cabLPL,    cabLPR;
-    Biquad cabLP2L,   cabLP2R;
-
-    juce::SmoothedValue<float> levelSmoothed;
-
-    // ── Delay ─────────────────────────────────────────────────────────
-    static constexpr float kMaxDelaySeconds   = 2.0f;
-    static constexpr float kStereoOffsetRatio = 1.07f;
-    static constexpr float kLfoRateHz         = 0.7f;
-    static constexpr float kLfoDepthMs        = 0.7f;
-
-    juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Lagrange3rd>
-        delayL, delayR;
-    OnePoleLP delayFbLPL, delayFbLPR;
-    juce::SmoothedValue<float> delayTimeSmoothL, delayTimeSmoothR;
-    float lfoPhase = 0.0f;
-
-    // ── Reverb ────────────────────────────────────────────────────────
-    juce::dsp::Reverb reverb;
-    juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear>
-        preDelayL, preDelayR;
-    OnePoleLP reverbHCL, reverbHCR;
-    float prevReverbRoom = -1.0f, prevReverbDamp = -1.0f;
-
-    // ── Bypass crossfade ──────────────────────────────────────────────
-    juce::SmoothedValue<float> distBypassGain, delayBypassGain, reverbBypassGain;
-
-    juce::AudioBuffer<float> tempBuffer;
-    double currentSampleRate = 44100.0;
-
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NewProjectAudioProcessor)
+    JUCE_DECLARE_WEAK_REFERENCEABLE (ForgeAmpProcessor)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ForgeAmpProcessor)
 };
